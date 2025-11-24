@@ -1,0 +1,427 @@
+// app/dashboard/word-lists/[wordListId]/words/page.js
+'use client'
+import { useState, useEffect } from 'react'
+import { useAuth } from '@/context/AuthContext'
+import { createClient } from '@/lib/supabase/client'
+import { useParams, useRouter } from 'next/navigation'
+import { exportToPDFAdvanced, exportToCSVWords, exportToTXTWords } from '@/utils/exportUtils'
+import Link from 'next/link'
+
+
+export default function WordListWords() {
+  const { user } = useAuth()
+  const params = useParams()
+  const router = useRouter()
+  const wordListId = params.wordListId
+  const [words, setWords] = useState([])
+  const [wordListInfo, setWordListInfo] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [filters, setFilters] = useState({
+    status: 'all', // all, learned, unlearned
+    showDefinition: true
+  })
+  const [selectedWords, setSelectedWords] = useState(new Set())
+  const [selectAll, setSelectAll] = useState(false)
+  const supabase = createClient()
+
+  useEffect(() => {
+    if (user && wordListId) {
+      fetchWordListInfo()
+      fetchWords()
+    }
+  }, [user, wordListId])
+
+  const fetchWordListInfo = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('word_lists')
+        .select('*')
+        .eq('id', wordListId)
+        .single()
+
+      if (!error && data) {
+        setWordListInfo(data)
+      } else {
+        setError('词库不存在或已被删除')
+      }
+    } catch (error) {
+      console.error('获取词库信息失败:', error)
+      setError('获取词库信息失败')
+    }
+  }
+
+  const fetchWords = async () => {
+    try {
+      setLoading(true)
+      setError('')
+
+      // 获取词库的所有单词，并关联学习状态
+      const { data, error } = await supabase
+        .from('word_list_words')
+        .select(`
+          *,
+          study_records (
+            id,
+            familiarity,
+            last_studied_at,
+            review_count
+          )
+        `)
+        .eq('word_list_id', wordListId)
+        .order('word', { ascending: true })
+
+      if (error) throw error
+
+      // 处理数据，添加学习状态
+      const processedWords = (data || []).map(word => ({
+        ...word,
+        learned: word.study_records && word.study_records.length > 0,
+        familiarity: word.study_records?.[0]?.familiarity || 0,
+        last_studied_at: word.study_records?.[0]?.last_studied_at,
+        review_count: word.study_records?.[0]?.review_count || 0
+      }))
+
+      setWords(processedWords)
+    } catch (err) {
+      console.error('获取单词列表失败:', err)
+      setError('获取单词列表失败，请刷新页面重试')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 过滤单词
+  const filteredWords = words.filter(word => {
+    if (filters.status === 'learned') return word.learned
+    if (filters.status === 'unlearned') return !word.learned
+    return true
+  })
+
+  // 处理单词选择
+  const handleWordSelect = (wordId) => {
+    const newSelected = new Set(selectedWords)
+    if (newSelected.has(wordId)) {
+      newSelected.delete(wordId)
+    } else {
+      newSelected.add(wordId)
+    }
+    setSelectedWords(newSelected)
+    setSelectAll(newSelected.size === filteredWords.length)
+  }
+
+  // 全选/取消全选
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedWords(new Set())
+    } else {
+      const allWordIds = new Set(filteredWords.map(word => word.id))
+      setSelectedWords(allWordIds)
+    }
+    setSelectAll(!selectAll)
+  }
+
+  // 导出选中单词
+  const handleExport = async (format) => {
+    const selectedWordData = words.filter(word => selectedWords.has(word.id))
+    
+    if (selectedWordData.length === 0) {
+      alert('请先选择要导出的单词')
+      return
+    }
+
+    try {
+      switch (format) {
+        case 'pdf':
+          await exportToPDFAdvanced(selectedWordData, wordListInfo?.name || 'wordlist')
+          break
+        case 'csv':
+          exportToCSVWords(selectedWordData, wordListInfo?.name || 'wordlist')
+          break
+        case 'txt':
+          exportToTXTWords(selectedWordData, wordListInfo?.name || 'wordlist')
+          break
+        default:
+          alert('不支持的导出格式')
+      }
+      
+      // 导出成功后显示提示
+      alert(`成功导出 ${selectedWordData.length} 个单词`)
+      
+    } catch (error) {
+      console.error('导出失败:', error)
+      alert('导出失败，请重试')
+    }
+  }
+
+  // 获取熟悉度颜色
+  const getFamiliarityColor = (familiarity) => {
+    if (familiarity >= 4) return 'text-green-600 bg-green-100'
+    if (familiarity >= 2) return 'text-yellow-600 bg-yellow-100'
+    return 'text-red-600 bg-red-100'
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-center items-center min-h-64">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+          <div className="text-red-500 mb-4">
+            <svg className="mx-auto h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-medium text-red-800 mb-2">出错了</h3>
+          <p className="text-red-700 mb-4">{error}</p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <button
+              onClick={fetchWords}
+              className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              重新加载
+            </button>
+            <button
+              onClick={() => router.push('/dashboard/word-lists')}
+              className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              返回词库列表
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      {/* 页面头部 */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center space-x-2 text-sm text-gray-500 mb-2">
+              <Link href="/dashboard/word-lists" className="hover:text-gray-700">
+                词库列表
+              </Link>
+              <span>›</span>
+              <span>{wordListInfo?.name}</span>
+            </div>
+            <h1 className="text-3xl font-bold text-gray-900">{wordListInfo?.name} - 单词列表</h1>
+            <p className="text-gray-600 mt-2">
+              {wordListInfo?.description} • 共 {words.length} 个单词
+            </p>
+          </div>
+          <Link
+            href={`/dashboard/study/${wordListId}`}
+            className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-medium"
+          >
+            开始学习
+          </Link>
+        </div>
+      </div>
+
+      {/* 控制面板 */}
+      <div className="bg-white shadow rounded-lg p-6 mb-6">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          {/* 筛选选项 */}
+          <div className="flex flex-wrap gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">学习状态</label>
+              <select
+                value={filters.status}
+                onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+                className="border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">全部单词 ({words.length})</option>
+                <option value="learned">已学习 ({words.filter(w => w.learned).length})</option>
+                <option value="unlearned">未学习 ({words.filter(w => !w.learned).length})</option>
+              </select>
+            </div>
+
+            <div className="flex items-center">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={filters.showDefinition}
+                  onChange={(e) => setFilters(prev => ({ ...prev, showDefinition: e.target.checked }))}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">显示释义</span>
+              </label>
+            </div>
+          </div>
+
+          {/* 导出选项 */}
+          <div className="flex flex-wrap gap-3">
+            <span className="text-sm text-gray-700 self-center">
+              已选择 {selectedWords.size} 个单词
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleExport('pdf')}
+                className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium"
+              >
+                导出 PDF
+              </button>
+              <button
+                onClick={() => handleExport('csv')}
+                className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md text-sm font-medium"
+              >
+                导出 CSV
+              </button>
+              <button
+                onClick={() => handleExport('txt')}
+                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium"
+              >
+                导出 TXT
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 单词列表 */}
+      <div className="bg-white shadow rounded-lg overflow-hidden">
+        {/* 表格头部 */}
+        <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
+          <div className="flex items-center space-x-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={selectAll}
+                onChange={handleSelectAll}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">全选</span>
+            </label>
+            <span className="text-sm text-gray-500">
+              显示 {filteredWords.length} 个单词
+            </span>
+          </div>
+        </div>
+
+        {/* 单词表格 */}
+        <div className="divide-y divide-gray-200">
+          {filteredWords.length === 0 ? (
+            <div className="text-center py-12">
+              <div className="text-gray-400 mb-4">
+                <svg className="mx-auto h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <p className="text-gray-500">没有找到匹配的单词</p>
+            </div>
+          ) : (
+            filteredWords.map((word) => (
+              <div key={word.id} className="px-6 py-4 hover:bg-gray-50">
+                <div className="flex items-start space-x-4">
+                  {/* 选择框 */}
+                  <div className="flex-shrink-0 pt-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedWords.has(word.id)}
+                      onChange={() => handleWordSelect(word.id)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {/* 单词内容 */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3 mb-2">
+                          <h3 className="text-lg font-semibold text-gray-900">{word.word}</h3>
+                          {word.pronunciation && (
+                            <span className="text-gray-600 text-sm">/{word.pronunciation}/</span>
+                          )}
+                          {word.part_of_speech && (
+                            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                              {word.part_of_speech}
+                            </span>
+                          )}
+                        </div>
+
+                        {filters.showDefinition && (
+                          <p className="text-gray-700 mb-2">{word.definition}</p>
+                        )}
+
+                        {word.example_sentence && (
+                          <p className="text-sm text-gray-600 italic">
+                            例句: {word.example_sentence}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* 学习状态 */}
+                      <div className="flex-shrink-0 text-right">
+                        {word.learned ? (
+                          <div className="flex items-center space-x-2">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getFamiliarityColor(word.familiarity)}`}>
+                              熟悉度: {word.familiarity}/5
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              复习 {word.review_count} 次
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                            未学习
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* 底部操作栏 */}
+      {selectedWords.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-lg px-6 py-4 border border-gray-200">
+          <div className="flex items-center space-x-4">
+            <span className="text-sm font-medium text-gray-700">
+              已选择 {selectedWords.size} 个单词
+            </span>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handleExport('pdf')}
+                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm"
+              >
+                导出 PDF
+              </button>
+              <button
+                onClick={() => handleExport('csv')}
+                className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm"
+              >
+                导出 CSV
+              </button>
+              <button
+                onClick={() => handleExport('txt')}
+                className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm"
+              >
+                导出 TXT
+              </button>
+              <button
+                onClick={() => setSelectedWords(new Set())}
+                className="bg-gray-500 hover:bg-gray-600 text-white px-3 py-1 rounded text-sm"
+              >
+                取消选择
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

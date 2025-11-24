@@ -104,19 +104,25 @@ export default function WordListStudy() {
         return
       }
 
+      // 确保每个单词都有正确的 study_record_id 字段
+      const wordsWithCorrectId = studyWords.map(word => ({
+        ...word,
+        study_record_id: word.id // 或者从查询中获取的正确字段名
+      }))
+
       // 恢复进度
       const savedProgress = studySession.getProgress()
-      if (savedProgress && savedProgress.currentIndex < studyWords.length) {
+      if (savedProgress && savedProgress.currentIndex < wordsWithCorrectId.length) {
         setCurrentIndex(savedProgress.currentIndex)
       } else {
         setCurrentIndex(0)
       }
 
-      setWords(studyWords)
+      setWords(wordsWithCorrectId)
       setStats({
-        total: studyWords.length,
-        learned: studyWords.filter(word => word.last_studied_at).length,
-        reviewing: studyWords.filter(word => !word.last_studied_at).length
+        total: wordsWithCorrectId.length,
+        learned: wordsWithCorrectId.filter(word => word.last_studied_at).length,
+        reviewing: wordsWithCorrectId.filter(word => !word.last_studied_at).length
       })
 
     } catch (error) {
@@ -164,24 +170,28 @@ export default function WordListStudy() {
       // 检查是否已经存在学习记录
       let studyRecordId = currentWord.id
       let isNewRecord = false
+      let reviewData // 提前声明 reviewData 变量
 
       if (!currentWord.id) {
         // 这是一个新单词，还没有学习记录，需要创建
+        // 先计算复习数据
+        reviewData = calculateNextReview(familiarity)
+        
         const { data: newRecord, error: createError } = await supabase
           .from('study_records')
-          .insert({
+          .upsert({
             user_id: user.id,
             word_list_id: parseInt(wordListId),
             word_list_word_id: currentWord.word_list_word_id,
-            word: currentWord.word,
-            definition: currentWord.definition,
-            pronunciation: currentWord.pronunciation,
             familiarity: familiarity,
             review_count: 1,
             ease_factor: 2.5,
             interval_days: 1,
             last_studied_at: now,
-            next_review_at: calculateNextReview(familiarity).nextReviewAt
+            next_review_at: reviewData.nextReviewAt
+          }, {
+            onConflict: 'user_id,word_list_id,word_list_word_id',
+            ignoreDuplicates: false
           })
           .select()
           .single()
@@ -190,17 +200,15 @@ export default function WordListStudy() {
 
         studyRecordId = newRecord.id
         isNewRecord = true
-      }
+      } else {
+        // 计算下次复习时间
+        reviewData = calculateNextReview(
+          familiarity,
+          currentWord.interval_days || 1,
+          currentWord.ease_factor || 2.5
+        )
 
-      // 计算下次复习时间
-      const reviewData = calculateNextReview(
-        familiarity,
-        currentWord.interval_days || 1,
-        currentWord.ease_factor || 2.5
-      )
-
-      // 更新学习记录（如果是已存在的记录）
-      if (!isNewRecord) {
+        // 更新学习记录（如果是已存在的记录）
         const { error: updateError } = await supabase
           .from('study_records')
           .update({
@@ -244,7 +252,7 @@ export default function WordListStudy() {
       setPageError('保存学习进度失败')
     }
   }
-
+  
   const restartSession = () => {
     studySession.clearProgress()
     setCurrentIndex(0)
