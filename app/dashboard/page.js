@@ -9,7 +9,7 @@ import Link from 'next/link'
 export default function Dashboard() {
   const { user, loading } = useAuth()
   const router = useRouter()
-  const [wordLists, setWordLists] = useState([])
+  const [userWordLists, setUserWordLists] = useState([]) // 改为用户选择的词库
   const [stats, setStats] = useState({
     totalWords: 0,
     learnedWords: 0,
@@ -17,7 +17,7 @@ export default function Dashboard() {
     learnedToday: 0,
     streak: 0
   })
-  const [dashboardError, setDashboardError] = useState('') // 重命名为 dashboardError 避免冲突
+  const [dashboardError, setDashboardError] = useState('')
   const [loadingStats, setLoadingStats] = useState(true)
   const supabase = createClient()
 
@@ -25,39 +25,45 @@ export default function Dashboard() {
     if (!loading && !user) {
       router.push('/auth/login')
     } else if (user) {
-      fetchWordLists()
+      fetchUserWordLists() // 改为获取用户选择的词库
       fetchStats()
     }
   }, [user, loading, router])
 
-  // app/dashboard/page.js - 更新 fetchWordLists 函数
-  const fetchWordLists = async () => {
+  // 获取用户选择的词库
+  const fetchUserWordLists = async () => {
     try {
-      console.log('开始获取词库，用户ID:', user?.id)
-      
       const { data, error } = await supabase
-        .from('word_lists')
-        .select('*')
-        .eq('created_by', user.id)
-        .order('created_at', { ascending: false })
+        .from('user_word_lists')
+        .select(`
+          word_list_id,
+          word_lists (
+            id,
+            name,
+            description,
+            word_count
+          )
+        `)
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .order('added_at', { ascending: false })
         .limit(3)
 
       if (error) {
-        console.error('获取词库失败:', error.message || error)
-        setDashboardError('获取词库失败，请刷新页面重试')
-        setWordLists([]) // 确保设置为空数组而不是 undefined
+        console.error('获取用户词库失败:', error)
         return
       }
 
-      console.log('获取到的词库数据:', data)
-      setWordLists(data || []) // 确保即使 data 为 null 也设置为空数组
+      // 提取词库信息
+      const selectedWordLists = data.map(item => item.word_lists)
+      setUserWordLists(selectedWordLists)
     } catch (err) {
-      console.error('获取词库时发生错误:', err)
-      setDashboardError('获取词库时发生错误')
-      setWordLists([]) // 错误时也设置为空数组
+      console.error('获取用户词库错误:', err)
+      setDashboardError('获取词库失败')
     }
   }
 
+  // ... 其他函数保持不变（fetchStats等）...
   const fetchStats = async () => {
     try {
       if (!user) return
@@ -164,7 +170,7 @@ export default function Dashboard() {
             <div className="ml-3">
               <p className="text-sm text-red-700">
                 {dashboardError}
-                <button onClick={() => { fetchWordLists(); fetchStats(); }} className="ml-2 text-red-700 underline">
+                <button onClick={() => { fetchUserWordLists(); fetchStats(); }} className="ml-2 text-red-700 underline">
                   重试
                 </button>
               </p>
@@ -173,7 +179,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 统计卡片 */}
+      {/* 统计卡片 - 保持不变 */}
       {loadingStats ? (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           {[1, 2, 3, 4].map((i) => (
@@ -187,6 +193,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          {/* 统计卡片内容保持不变 */}
           <div className="bg-white shadow rounded-lg p-6">
             <div className="flex items-center">
               <div className="p-3 rounded-full bg-blue-100 text-blue-500 mr-4">
@@ -245,13 +252,13 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 🚀 快速入口区域 */}
+      {/* 🚀 快速入口区域 - 修改为适应公共词库 */}
       <div className="bg-white shadow rounded-lg p-6 mb-8">
         <h2 className="text-xl font-semibold text-gray-900 mb-4">快速开始</h2>
         <p className="text-gray-600 mb-6">选择你想要进行的操作：</p>
         
         <div className="flex flex-col sm:flex-row gap-4">
-          {/* 管理词库按钮 */}
+          {/* 选择词库按钮 */}
           <Link
             href="/dashboard/word-lists"
             className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200"
@@ -259,13 +266,13 @@ export default function Dashboard() {
             <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
             </svg>
-            管理词库
+            {userWordLists.length > 0 ? '管理词库' : '选择词库'}
           </Link>
 
-          {/* 开始学习按钮 - 只在有词库时显示 */}
-          {wordLists.length > 0 && (
+          {/* 开始学习按钮 - 只在有选择的词库时显示 */}
+          {userWordLists.length > 0 && (
             <Link
-              href={`/dashboard/study?wordListId=${wordLists[0].id}`}
+              href={`/dashboard/study?wordListId=${userWordLists[0].id}`}
               className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-green-500 hover:bg-green-600 transition-colors duration-200"
             >
               <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -276,36 +283,35 @@ export default function Dashboard() {
             </Link>
           )}
 
-          {/* 导入词库按钮 - 在没有词库时显示 */}
-          {wordLists.length === 0 && (
-            <Link
-              href="/dashboard/word-lists"
-              className="inline-flex items-center justify-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors duration-200"
-            >
-              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              导入第一个词库
-            </Link>
-          )}
+          {/* 学习设置按钮 */}
+          <Link
+            href="/dashboard/settings"
+            className="inline-flex items-center justify-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors duration-200"
+          >
+            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            学习设置
+          </Link>
         </div>
       </div>
 
-      {/* 最近词库显示 */}
-      {wordLists.length > 0 && (
+      {/* 已选择的词库显示 */}
+      {userWordLists.length > 0 ? (
         <div className="bg-white shadow rounded-lg p-6">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-semibold text-gray-900">最近词库</h2>
+            <h2 className="text-xl font-semibold text-gray-900">已选择的词库</h2>
             <Link 
               href="/dashboard/word-lists" 
               className="text-blue-500 hover:text-blue-600 text-sm font-medium"
             >
-              查看全部
+              管理词库
             </Link>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {wordLists.slice(0, 3).map((list) => (
+            {userWordLists.map((list) => (
               <div key={list.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                 <h3 className="font-semibold text-gray-900 truncate">{list.name}</h3>
                 {list.description && (
@@ -324,19 +330,17 @@ export default function Dashboard() {
             ))}
           </div>
         </div>
-      )}
-
-      {/* 学习提示 */}
-      {wordLists.length === 0 && (
+      ) : (
+        /* 学习提示 - 当用户没有选择任何词库时显示 */
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
           <div className="text-yellow-500 mb-4">
             <svg className="mx-auto h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
             </svg>
           </div>
-          <h3 className="text-lg font-medium text-yellow-800 mb-2">还没有词库</h3>
+          <h3 className="text-lg font-medium text-yellow-800 mb-2">还没有选择词库</h3>
           <p className="text-yellow-700 mb-4">
-            导入你的第一个词库，开始高效学习单词吧！
+            选择你想要学习的词库，开始高效学习单词吧！
           </p>
           <Link
             href="/dashboard/word-lists"
@@ -345,7 +349,7 @@ export default function Dashboard() {
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
-            立即导入词库
+            立即选择词库
           </Link>
         </div>
       )}

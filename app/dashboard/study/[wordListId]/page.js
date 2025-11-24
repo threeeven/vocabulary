@@ -23,7 +23,7 @@ export default function WordListStudy() {
   const [sessionComplete, setSessionComplete] = useState(false)
   const [dailyGoal, setDailyGoal] = useState(10)
   const [wordListInfo, setWordListInfo] = useState(null)
-  const [pageError, setPageError] = useState('') // 添加错误状态
+  const [pageError, setPageError] = useState('')
   const supabase = createClient()
 
   // 初始化学习会话
@@ -77,10 +77,32 @@ export default function WordListStudy() {
   const fetchStudyWords = async () => {
     try {
       setLoading(true)
-      setPageError('') // 清除错误
+      setPageError('')
+      
+      // 检查用户是否选择了这个词库
+      const { data: userWordList, error: checkError } = await supabase
+        .from('user_word_lists')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('word_list_id', wordListId)
+        .eq('is_active', true)
+        .single()
+
+      if (checkError || !userWordList) {
+        setPageError('您还没有选择这个词库，请先选择词库')
+        return
+      }
+
+      // 直接调用 StudySession 的 getStudyWords 方法
       const studyWords = await studySession.getStudyWords(dailyGoal)
       
-      console.log('获取到的学习单词:', studyWords) // 调试信息
+      console.log('获取到的学习单词:', studyWords)
+
+      if (studyWords.length === 0) {
+        setSessionComplete(true)
+        setLoading(false)
+        return
+      }
 
       // 恢复进度
       const savedProgress = studySession.getProgress()
@@ -97,13 +119,9 @@ export default function WordListStudy() {
         reviewing: studyWords.filter(word => !word.last_studied_at).length
       })
 
-      // 如果没有学习任务，显示完成页面
-      if (studyWords.length === 0) {
-        setSessionComplete(true)
-      }
     } catch (error) {
       console.error('获取学习单词失败:', error)
-      setPageError('获取学习单词失败: ' + error.message) // 使用正确的错误状态
+      setPageError('获取学习单词失败: ' + error.message)
     } finally {
       setLoading(false)
     }
@@ -142,31 +160,67 @@ export default function WordListStudy() {
     const currentWord = words[currentIndex]
     const now = new Date().toISOString()
 
-    const reviewData = calculateNextReview(
-      familiarity,
-      currentWord.interval_days || 1,
-      currentWord.ease_factor || 2.5
-    )
-
     try {
-      const { error } = await supabase
-        .from('study_records')
-        .update({
-          familiarity: familiarity,
-          last_studied_at: now,
-          next_review_at: reviewData.nextReviewAt,
-          review_count: (currentWord.review_count || 0) + 1,
-          ease_factor: reviewData.easeFactor,
-          interval_days: reviewData.interval
-        })
-        .eq('id', currentWord.id)
+      // 检查是否已经存在学习记录
+      let studyRecordId = currentWord.id
+      let isNewRecord = false
 
-      if (error) throw error
+      if (!currentWord.id) {
+        // 这是一个新单词，还没有学习记录，需要创建
+        const { data: newRecord, error: createError } = await supabase
+          .from('study_records')
+          .insert({
+            user_id: user.id,
+            word_list_id: parseInt(wordListId),
+            word_list_word_id: currentWord.word_list_word_id,
+            word: currentWord.word,
+            definition: currentWord.definition,
+            pronunciation: currentWord.pronunciation,
+            familiarity: familiarity,
+            review_count: 1,
+            ease_factor: 2.5,
+            interval_days: 1,
+            last_studied_at: now,
+            next_review_at: calculateNextReview(familiarity).nextReviewAt
+          })
+          .select()
+          .single()
+
+        if (createError) throw createError
+
+        studyRecordId = newRecord.id
+        isNewRecord = true
+      }
+
+      // 计算下次复习时间
+      const reviewData = calculateNextReview(
+        familiarity,
+        currentWord.interval_days || 1,
+        currentWord.ease_factor || 2.5
+      )
+
+      // 更新学习记录（如果是已存在的记录）
+      if (!isNewRecord) {
+        const { error: updateError } = await supabase
+          .from('study_records')
+          .update({
+            familiarity: familiarity,
+            last_studied_at: now,
+            next_review_at: reviewData.nextReviewAt,
+            review_count: (currentWord.review_count || 0) + 1,
+            ease_factor: reviewData.easeFactor,
+            interval_days: reviewData.interval
+          })
+          .eq('id', currentWord.id)
+
+        if (updateError) throw updateError
+      }
 
       // 更新本地状态
       const updatedWords = [...words]
       updatedWords[currentIndex] = {
         ...currentWord,
+        id: studyRecordId,
         familiarity,
         last_studied_at: now,
         next_review_at: reviewData.nextReviewAt,
@@ -186,7 +240,7 @@ export default function WordListStudy() {
         studySession.clearProgress()
       }
     } catch (error) {
-      console.error('更新学习记录失败:', error)
+      console.error('保存学习记录失败:', error)
       setPageError('保存学习进度失败')
     }
   }
@@ -217,14 +271,7 @@ export default function WordListStudy() {
     try {
       const { error } = await supabase
         .from('study_records')
-        .update({
-          familiarity: 0,
-          review_count: 0,
-          ease_factor: 2.5,
-          interval_days: 1,
-          last_studied_at: null,
-          next_review_at: null
-        })
+        .delete()
         .eq('user_id', user.id)
         .eq('word_list_id', wordListId)
 
@@ -239,6 +286,7 @@ export default function WordListStudy() {
     }
   }
 
+  // ... 渲染部分保持不变 ...
   if (loading) {
     return (
       <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
