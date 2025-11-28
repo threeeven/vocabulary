@@ -29,6 +29,6 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-, "app/test/page.js"  ],
+, "app/test/page.js", "components/UploadWordList.js", "components/UploadWordList.js", "components/UploadWordList.js"  ],
   "exclude": ["node_modules"]
 }

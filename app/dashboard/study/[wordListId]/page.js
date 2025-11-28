@@ -44,8 +44,28 @@ export default function WordListStudy() {
       fetchUserSettings()
       fetchWordListInfo()
       fetchStudyWords()
+      debugStudyRecords() // 添加调试查询
     }
   }, [user, wordListId])
+
+  // 在学习页面中添加调试函数
+  const debugStudyRecords = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('study_records')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('word_list_id', wordListId)
+      
+      if (error) {
+        console.error('查询学习记录失败:', error)
+      } else {
+        console.log('当前用户的学习记录:', data)
+      }
+    } catch (error) {
+      console.error('调试查询失败:', error)
+    }
+  }
 
   // 获取用户设置（每日学习目标）
   const fetchUserSettings = async () => {
@@ -83,12 +103,14 @@ export default function WordListStudy() {
       setPageError('获取词库信息失败')
     }
   }
+  
 
+// 修改 fetchStudyWords 函数，确保使用最新的 dailyGoal
   const fetchStudyWords = async () => {
     try {
       setLoading(true)
       setPageError('')
-      
+
       // 检查用户是否选择了这个词库
       const { data: userWordList, error: checkError } = await supabase
         .from('user_word_lists')
@@ -103,26 +125,71 @@ export default function WordListStudy() {
         return
       }
 
-      // 直接调用 StudySession 的 getStudyWords 方法
+      // 直接调用 StudySession 的 getStudyWords 方法，传入最新的 dailyGoal
       const studyWords = await studySession.getStudyWords(dailyGoal)
       
-      console.log('获取到的学习单词:', studyWords)
+      console.log('获取学习单词，目标:', dailyGoal, '实际获取:', studyWords.length)
 
+      // 检查是否有保存的进度
+      const savedProgress = studySession.getProgress()
+      console.log('恢复的进度:', savedProgress)
+      
+      if (savedProgress && savedProgress.words) {
+        // 有保存的进度，恢复进度
+        console.log('恢复保存的学习进度')
+        
+        // 确保我们只恢复当前词库的单词
+        const restoredWords = savedProgress.words.map(savedWord => {
+          // 在当前的studyWords中查找对应的单词
+          const currentWord = studyWords.find(w => 
+            w.id === savedWord.id || 
+            w.word_list_word_id === savedWord.word_list_word_id
+          )
+          
+          if (currentWord) {
+            // 合并保存的进度和当前单词信息
+            return {
+              ...currentWord,
+              study_record_id: savedWord.study_record_id,
+              familiarity: savedWord.familiarity,
+              review_count: savedWord.review_count,
+              ease_factor: savedWord.ease_factor,
+              interval_days: savedWord.interval_days,
+              last_studied_at: savedWord.last_studied_at,
+              next_review_at: savedWord.next_review_at,
+              needs_review: savedWord.needs_review || false
+            }
+          }
+          return currentWord
+        }).filter(Boolean) // 过滤掉未找到的单词
+        
+        console.log('恢复后的单词:', restoredWords)
+        
+        if (restoredWords.length > 0) {
+          setWords(restoredWords)
+          setCurrentIndex(savedProgress.currentIndex)
+          
+          setStats({
+            total: restoredWords.length,
+            learned: restoredWords.filter(word => word.last_studied_at).length,
+            reviewing: restoredWords.filter(word => !word.last_studied_at).length
+          })
+          
+          setLoading(false)
+          return
+        }
+      }
+
+      // 没有保存的进度或恢复失败，使用新的学习单词
       if (studyWords.length === 0) {
         setSessionComplete(true)
         setLoading(false)
         return
       }
 
-      // 恢复进度
-      const savedProgress = studySession.getProgress()
-      if (savedProgress && savedProgress.currentIndex < studyWords.length) {
-        setCurrentIndex(savedProgress.currentIndex)
-      } else {
-        setCurrentIndex(0)
-      }
-
       setWords(studyWords)
+      setCurrentIndex(0)
+
       setStats({
         total: studyWords.length,
         learned: studyWords.filter(word => word.last_studied_at).length,
@@ -137,29 +204,84 @@ export default function WordListStudy() {
     }
   }
 
-  const calculateNextReview = (familiarity, currentInterval = 1, easeFactor = 2.5) => {
+// 修改 useEffect，确保在 dailyGoal 变化时重新获取学习单词
+useEffect(() => {
+  if (user && wordListId) {
+    fetchWordListInfo()
+    fetchStudyWords()
+  }
+}, [user, wordListId])
+
+// 添加 dailyGoal 作为依赖，当每日目标变化时重新获取学习单词
+useEffect(() => {
+  if (user && wordListId && words.length === 0) {
+    // 只有在没有学习单词时才重新获取
+    fetchStudyWords()
+  }
+}, [dailyGoal])
+
+  // 基于记忆科学和Anki算法的复习间隔计算
+  const calculateNextReview = (familiarity, currentInterval = 1, easeFactor = 2.5, reviewCount = 0) => {
     let newInterval
     let newEaseFactor = easeFactor
 
-    if (familiarity >= 4) {
-      newInterval = Math.round(currentInterval * newEaseFactor)
-      newEaseFactor = Math.max(1.3, newEaseFactor + 0.1)
-    } else if (familiarity >= 2) {
-      newInterval = Math.max(1, Math.round(currentInterval / 2))
-      newEaseFactor = Math.max(1.3, newEaseFactor - 0.2)
+    // 对于新单词（reviewCount = 0）的特殊处理
+    if (reviewCount === 0) {
+      switch (familiarity) {
+        case 1: // 忘记 - 立即重新学习（在当前会话中）
+          newInterval = 1 // 1天后复习（如果用户完成当前会话）
+          newEaseFactor = Math.max(1.3, easeFactor - 0.2)
+          break
+        case 2: // 困难 - 短间隔
+          newInterval = 1 // 1天后复习
+          newEaseFactor = Math.max(1.3, easeFactor - 0.15)
+          break
+        case 3: // 一般 - 中等间隔
+          newInterval = 3 // 3天后复习
+          newEaseFactor = easeFactor
+          break
+        case 4: // 简单 - 长间隔
+          newInterval = 7 // 7天后复习
+          newEaseFactor = easeFactor + 0.1
+          break
+        default:
+          newInterval = 1
+          newEaseFactor = 2.5
+      }
     } else {
-      newInterval = 1
-      newEaseFactor = Math.max(1.3, newEaseFactor - 0.3)
+      // 对于已学习单词的标准Anki算法
+      switch (familiarity) {
+        case 1: // 忘记 - 重置学习进度
+          newInterval = 1 // 重置为1天
+          newEaseFactor = Math.max(1.3, easeFactor - 0.2)
+          break
+        case 2: // 困难
+          newInterval = Math.max(1, Math.round(currentInterval * 1.2))
+          newEaseFactor = Math.max(1.3, easeFactor - 0.15)
+          break
+        case 3: // 一般
+          newInterval = Math.round(currentInterval * easeFactor)
+          newEaseFactor = easeFactor
+          break
+        case 4: // 简单
+          newInterval = Math.round(currentInterval * easeFactor * 1.3)
+          newEaseFactor = easeFactor + 0.1
+          break
+        default:
+          newInterval = 1
+          newEaseFactor = 2.5
+      }
     }
 
-    newInterval = Math.min(newInterval, 90)
+    // 限制最小间隔为1天，最大间隔为365天
+    newInterval = Math.max(1, Math.min(newInterval, 365))
 
     const nextReviewDate = new Date()
     nextReviewDate.setDate(nextReviewDate.getDate() + newInterval)
 
     return {
       interval: newInterval,
-      easeFactor: newEaseFactor,
+      easeFactor: parseFloat(newEaseFactor.toFixed(2)),
       nextReviewAt: nextReviewDate.toISOString()
     }
   }
@@ -171,44 +293,86 @@ export default function WordListStudy() {
     const now = new Date().toISOString()
 
     try {
-      // 检查是否已经存在学习记录
-      let studyRecordId = currentWord.id
+      let studyRecordId = currentWord.study_record_id
       let isNewRecord = false
+      let reviewData
 
-      if (!currentWord.id) {
+      console.log('处理学习记录:', { 
+        studyRecordId, 
+        wordId: currentWord.id,
+        word: currentWord.word,
+        reviewCount: currentWord.review_count || 0
+      })
+
+      // 计算复习数据
+      reviewData = calculateNextReview(
+        familiarity,
+        currentWord.interval_days || 1,
+        currentWord.ease_factor || 2.5,
+        currentWord.review_count || 0
+      )
+
+      // 如果是"忘记"（familiarity=1），不立即保存到数据库，而是重新加入学习队列
+      if (familiarity === 1) {
+        console.log('用户选择"忘记"，单词将重新加入学习队列')
+        
+        // 更新本地状态，但不保存到数据库
+        const updatedWords = [...words]
+        updatedWords[currentIndex] = {
+          ...currentWord,
+          // 不更新学习记录ID，保持原有状态
+          // 不更新熟悉度，保持原样
+          // 只标记为需要重新学习
+          needs_review: true
+        }
+        
+        // 将当前单词移到队列末尾
+        const currentWordCopy = {...updatedWords[currentIndex]}
+        updatedWords.splice(currentIndex, 1) // 移除当前位置的单词
+        updatedWords.push(currentWordCopy) // 添加到队列末尾
+        
+        setWords(updatedWords)
+        
+        // 保持当前索引不变（因为移除了当前单词，下一个单词会自动补位）
+        // 不需要保存进度到数据库
+        studySession.saveProgress(currentIndex, updatedWords)
+        
+        return // 提前返回，不进行数据库操作
+      }
+
+      // 对于非"忘记"的情况，正常保存学习记录
+      if (!studyRecordId) {
         // 这是一个新单词，还没有学习记录，需要创建
         const { data: newRecord, error: createError } = await supabase
           .from('study_records')
-          .insert({
+          .upsert({
             user_id: user.id,
             word_list_id: parseInt(wordListId),
-            word_list_word_id: currentWord.word_list_word_id,
+            word_list_word_id: currentWord.id,
             familiarity: familiarity,
             review_count: 1,
-            ease_factor: 2.5,
-            interval_days: 1,
+            ease_factor: reviewData.easeFactor,
+            interval_days: reviewData.interval,
             last_studied_at: now,
-            next_review_at: calculateNextReview(familiarity).nextReviewAt
+            next_review_at: reviewData.nextReviewAt
+          }, {
+            onConflict: 'user_id,word_list_id,word_list_word_id',
+            ignoreDuplicates: false
           })
           .select()
           .single()
 
-        if (createError) throw createError
+        if (createError) {
+          console.error('创建学习记录失败:', createError)
+          throw createError
+        }
 
         studyRecordId = newRecord.id
         isNewRecord = true
-      }
-
-      // 计算下次复习时间
-      const reviewData = calculateNextReview(
-        familiarity,
-        currentWord.interval_days || 1,
-        currentWord.ease_factor || 2.5
-      )
-
-      // 更新学习记录（如果是已存在的记录）
-      if (!isNewRecord) {
-        const { error: updateError } = await supabase
+        console.log('创建新学习记录成功:', newRecord)
+      } else {
+        // 更新学习记录（如果是已存在的记录）
+        const { data: updatedRecord, error: updateError } = await supabase
           .from('study_records')
           .update({
             familiarity: familiarity,
@@ -218,22 +382,30 @@ export default function WordListStudy() {
             ease_factor: reviewData.easeFactor,
             interval_days: reviewData.interval
           })
-          .eq('id', currentWord.id)
+          .eq('id', studyRecordId)
+          .select()
+          .single()
 
-        if (updateError) throw updateError
+        if (updateError) {
+          console.error('更新学习记录失败:', updateError)
+          throw updateError
+        }
+        
+        console.log('更新学习记录成功:', updatedRecord)
       }
 
       // 更新本地状态
       const updatedWords = [...words]
       updatedWords[currentIndex] = {
         ...currentWord,
-        id: studyRecordId,
+        study_record_id: studyRecordId,
         familiarity,
         last_studied_at: now,
         next_review_at: reviewData.nextReviewAt,
         review_count: (currentWord.review_count || 0) + 1,
         ease_factor: reviewData.easeFactor,
-        interval_days: reviewData.interval
+        interval_days: reviewData.interval,
+        needs_review: false // 清除重新学习标记
       }
       setWords(updatedWords)
 
@@ -248,21 +420,37 @@ export default function WordListStudy() {
       }
     } catch (error) {
       console.error('保存学习记录失败:', error)
-      setPageError('保存学习进度失败')
+      setPageError('保存学习进度失败: ' + error.message)
     }
   }
 
+  // 修改暂停会话函数
+  const pauseSession = () => {
+    // 保存当前进度
+    studySession.saveProgress(currentIndex, words)
+    console.log('学习已暂停，进度已保存')
+    router.push('/dashboard/study')
+  }
+
+  // 修改继续学习函数（在词库列表页面添加继续学习按钮）
+  // 在词库列表页面，如果有保存的进度，显示继续学习按钮
+
+  // 添加重新开始会话函数
   const restartSession = () => {
+    // 清除进度并重新开始
     studySession.clearProgress()
     setCurrentIndex(0)
     setSessionComplete(false)
+    setWords([]) // 清空当前单词，强制重新获取
     fetchStudyWords()
   }
 
-  const pauseSession = () => {
-    studySession.saveProgress(currentIndex, words)
-    router.push('/dashboard/study')
+  // 修改继续学习逻辑，确保能够正确恢复
+  const continueSession = () => {
+    // 直接调用 fetchStudyWords，它会自动检测并恢复进度
+    fetchStudyWords()
   }
+
 
   const changeWordList = () => {
     studySession.saveProgress(currentIndex, words)
@@ -453,6 +641,12 @@ export default function WordListStudy() {
               className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-medium text-sm"
             >
               暂停学习
+            </button>
+            <button
+              onClick={restartSession}
+              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-medium text-sm"
+            >
+              重新开始
             </button>
             <button
               onClick={changeWordList}

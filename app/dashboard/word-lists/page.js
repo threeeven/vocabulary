@@ -99,25 +99,12 @@ export default function WordLists() {
     }
   }
 
-  // 移除 initializeStudyRecords 函数
-
-  // const getLevelColor = (level) => {
-  //   const colors = {
-  //     beginner: 'bg-green-100 text-green-800',
-  //     intermediate: 'bg-yellow-100 text-yellow-800',
-  //     advanced: 'bg-red-100 text-red-800'
-  //   }
-  //   return colors[level] || 'bg-gray-100 text-gray-800'
-  // }
-
-  // const getLevelText = (level) => {
-  //   const texts = {
-  //     beginner: '初级',
-  //     intermediate: '中级',
-  //     advanced: '高级'
-  //   }
-  //   return texts[level] || level
-  // }
+  // 在词库卡片中添加继续学习按钮
+  const hasProgress = (wordListId) => {
+    if (typeof window === 'undefined') return false
+    const progress = localStorage.getItem(`study_progress_${user.id}_${wordListId}`)
+    return !!progress
+  }
 
   if (loading) {
     return (
@@ -247,26 +234,25 @@ export default function WordLists() {
                     >
                       {isSelected ? '取消选择' : '选择学习'}
                     </button>
-                    
-                    {isSelected && (
-                      <>
-                        <Link
-                          href={`/dashboard/study?wordListId=${list.id}`}
-                          className="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
-                        >
-                          开始学习
-                        </Link>
-                        <Link
-                          href={`/dashboard/word-lists/${list.id}/words`}
-                          className="bg-gray-500 hover:bg-gray-600 text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
-                          title="查看单词详情"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        </Link>
-                      </>
-                    )}
+                      {isSelected && (
+                        <div className="flex space-x-2">
+                          <Link
+                            href={`/dashboard/study/${list.id}`}
+                            className="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
+                          >
+                            {hasProgress(list.id) ? '继续学习' : '开始学习'}
+                          </Link>
+                          <Link
+                            href={`/dashboard/word-lists/${list.id}/words`}
+                            className="bg-gray-500 hover:bg-gray-600 text-white py-2 px-4 rounded-md text-sm font-medium transition-colors"
+                            title="查看单词详情"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                          </Link>
+                        </div>
+                      )}
                   </div>
                 </div>
               </div>

@@ -97,7 +97,10 @@ export default function WordListWords() {
                 id,
                 familiarity,
                 last_studied_at,
-                review_count
+                next_review_at,
+                review_count,
+                ease_factor,
+                interval_days
               )
             `)
             .eq('word_list_id', wordListId)
@@ -148,14 +151,21 @@ export default function WordListWords() {
         }
       }
 
-      // 处理数据...
-      const processedWords = allWords.map(word => ({
-        ...word,
-        learned: word.study_records && word.study_records.length > 0,
-        familiarity: word.study_records?.[0]?.familiarity || 0,
-        last_studied_at: word.study_records?.[0]?.last_studied_at,
-        review_count: word.study_records?.[0]?.review_count || 0
-      }))
+      // 处理数据，添加学习状态
+      const processedWords = allWords.map(word => {
+        const studyRecord = word.study_records && word.study_records.length > 0 ? word.study_records[0] : null
+        return {
+          ...word,
+          learned: !!studyRecord,
+          study_record_id: studyRecord?.id,
+          familiarity: studyRecord?.familiarity || 0,
+          last_studied_at: studyRecord?.last_studied_at,
+          next_review_at: studyRecord?.next_review_at,
+          review_count: studyRecord?.review_count || 0,
+          ease_factor: studyRecord?.ease_factor || 2.5,
+          interval_days: studyRecord?.interval_days || 1
+        }
+      })
 
       setWords(processedWords)
       console.log(`成功获取 ${processedWords.length} 个单词`)
@@ -346,12 +356,27 @@ const handleExport = async (format) => {
 
 
 
-  // 获取熟悉度颜色
-  const getFamiliarityColor = (familiarity) => {
-    if (familiarity >= 4) return 'text-green-600 bg-green-100'
-    if (familiarity >= 2) return 'text-yellow-600 bg-yellow-100'
-    return 'text-red-600 bg-red-100'
+// 更新获取熟悉度颜色的函数
+const getFamiliarityColor = (familiarity) => {
+  switch (familiarity) {
+    case 4: return 'text-green-600 bg-green-100'
+    case 3: return 'text-yellow-600 bg-yellow-100'
+    case 2: return 'text-orange-600 bg-orange-100'
+    case 1: return 'text-red-600 bg-red-100'
+    default: return 'text-gray-600 bg-gray-100'
   }
+}
+
+// 更新获取熟悉度文本的函数
+const getFamiliarityText = (familiarity) => {
+  switch (familiarity) {
+    case 4: return '简单'
+    case 3: return '一般'
+    case 2: return '困难'
+    case 1: return '忘记'
+    default: return '未学习'
+  }
+}
 
   // ... 其余代码保持不变（loading, error, return JSX 等）
   // 注意：这里省略了剩余的JSX代码，因为它不需要修改
@@ -611,11 +636,16 @@ const handleExport = async (format) => {
                         {word.learned ? (
                           <div className="flex items-center space-x-2">
                             <span className={`px-2 py-1 rounded-full text-xs font-medium ${getFamiliarityColor(word.familiarity)}`}>
-                              熟悉度: {word.familiarity}/5
+                              {getFamiliarityText(word.familiarity)}
                             </span>
                             <span className="text-xs text-gray-500">
                               复习 {word.review_count} 次
                             </span>
+                            {word.next_review_at && (
+                              <span className="text-xs text-blue-500">
+                                下次: {new Date(word.next_review_at).toLocaleDateString()}
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
