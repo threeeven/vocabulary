@@ -5,7 +5,7 @@ import { jsPDF } from 'jspdf'
 const FONT_CONFIG = {
   chinese: {
     name: 'msyh',
-    fileName: 'msyh.ttf',
+    fileName: 'msyh.subset.ttf',
     fallback: 'helvetica'
   },
   english: {
