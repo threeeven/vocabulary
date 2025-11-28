@@ -29,6 +29,16 @@ export default function WordListStudy() {
   // 初始化学习会话
   const [studySession] = useState(new StudySession(user?.id, wordListId))
 
+  // 发音功能
+  const playPronunciation = (word, type = 'us') => {
+    // 有道发音API
+    const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type === 'uk' ? 1 : 2}`
+    const audio = new Audio(audioUrl)
+    audio.play().catch(error => {
+      console.error('播放发音失败:', error)
+    })
+  }
+
   useEffect(() => {
     if (user && wordListId) {
       fetchUserSettings()
@@ -104,25 +114,19 @@ export default function WordListStudy() {
         return
       }
 
-      // 确保每个单词都有正确的 study_record_id 字段
-      const wordsWithCorrectId = studyWords.map(word => ({
-        ...word,
-        study_record_id: word.id // 或者从查询中获取的正确字段名
-      }))
-
       // 恢复进度
       const savedProgress = studySession.getProgress()
-      if (savedProgress && savedProgress.currentIndex < wordsWithCorrectId.length) {
+      if (savedProgress && savedProgress.currentIndex < studyWords.length) {
         setCurrentIndex(savedProgress.currentIndex)
       } else {
         setCurrentIndex(0)
       }
 
-      setWords(wordsWithCorrectId)
+      setWords(studyWords)
       setStats({
-        total: wordsWithCorrectId.length,
-        learned: wordsWithCorrectId.filter(word => word.last_studied_at).length,
-        reviewing: wordsWithCorrectId.filter(word => !word.last_studied_at).length
+        total: studyWords.length,
+        learned: studyWords.filter(word => word.last_studied_at).length,
+        reviewing: studyWords.filter(word => !word.last_studied_at).length
       })
 
     } catch (error) {
@@ -170,16 +174,12 @@ export default function WordListStudy() {
       // 检查是否已经存在学习记录
       let studyRecordId = currentWord.id
       let isNewRecord = false
-      let reviewData // 提前声明 reviewData 变量
 
       if (!currentWord.id) {
         // 这是一个新单词，还没有学习记录，需要创建
-        // 先计算复习数据
-        reviewData = calculateNextReview(familiarity)
-        
         const { data: newRecord, error: createError } = await supabase
           .from('study_records')
-          .upsert({
+          .insert({
             user_id: user.id,
             word_list_id: parseInt(wordListId),
             word_list_word_id: currentWord.word_list_word_id,
@@ -188,10 +188,7 @@ export default function WordListStudy() {
             ease_factor: 2.5,
             interval_days: 1,
             last_studied_at: now,
-            next_review_at: reviewData.nextReviewAt
-          }, {
-            onConflict: 'user_id,word_list_id,word_list_word_id',
-            ignoreDuplicates: false
+            next_review_at: calculateNextReview(familiarity).nextReviewAt
           })
           .select()
           .single()
@@ -200,15 +197,17 @@ export default function WordListStudy() {
 
         studyRecordId = newRecord.id
         isNewRecord = true
-      } else {
-        // 计算下次复习时间
-        reviewData = calculateNextReview(
-          familiarity,
-          currentWord.interval_days || 1,
-          currentWord.ease_factor || 2.5
-        )
+      }
 
-        // 更新学习记录（如果是已存在的记录）
+      // 计算下次复习时间
+      const reviewData = calculateNextReview(
+        familiarity,
+        currentWord.interval_days || 1,
+        currentWord.ease_factor || 2.5
+      )
+
+      // 更新学习记录（如果是已存在的记录）
+      if (!isNewRecord) {
         const { error: updateError } = await supabase
           .from('study_records')
           .update({
@@ -252,7 +251,7 @@ export default function WordListStudy() {
       setPageError('保存学习进度失败')
     }
   }
-  
+
   const restartSession = () => {
     studySession.clearProgress()
     setCurrentIndex(0)
@@ -294,7 +293,7 @@ export default function WordListStudy() {
     }
   }
 
-  // ... 渲染部分保持不变 ...
+  // ... 渲染部分保持不变，但WordCard组件需要更新 ...
   if (loading) {
     return (
       <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -487,6 +486,7 @@ export default function WordListStudy() {
       <WordCard 
         word={currentWord} 
         onAnswer={handleAnswer}
+        onPlayPronunciation={playPronunciation}
       />
 
       {/* 学习提示 */}

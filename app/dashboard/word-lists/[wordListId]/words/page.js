@@ -4,9 +4,8 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { createClient } from '@/lib/supabase/client'
 import { useParams, useRouter } from 'next/navigation'
-import { exportToPDFAdvanced, exportToCSVWords, exportToTXTWords } from '@/utils/exportUtils'
 import Link from 'next/link'
-
+import { exportToPDFAdvanced, exportToCSVWords, exportToTXTWords } from '@/utils/exportUtils'
 
 export default function WordListWords() {
   const { user } = useAuth()
@@ -18,12 +17,21 @@ export default function WordListWords() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState({
-    status: 'all', // all, learned, unlearned
+    status: 'all',
     showDefinition: true
   })
   const [selectedWords, setSelectedWords] = useState(new Set())
   const [selectAll, setSelectAll] = useState(false)
   const supabase = createClient()
+
+  // 发音功能
+  const playPronunciation = (word, type = 'us') => {
+    const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type === 'uk' ? 1 : 2}`
+    const audio = new Audio(audioUrl)
+    audio.play().catch(error => {
+      console.error('播放发音失败:', error)
+    })
+  }
 
   useEffect(() => {
     if (user && wordListId) {
@@ -145,7 +153,6 @@ export default function WordListWords() {
           alert('不支持的导出格式')
       }
       
-      // 导出成功后显示提示
       alert(`成功导出 ${selectedWordData.length} 个单词`)
       
     } catch (error) {
@@ -267,20 +274,29 @@ export default function WordListWords() {
             <div className="flex gap-2">
               <button
                 onClick={() => handleExport('pdf')}
-                className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium"
+                className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2"
               >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
                 导出 PDF
               </button>
               <button
                 onClick={() => handleExport('csv')}
-                className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md text-sm font-medium"
+                className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2"
               >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
                 导出 CSV
               </button>
               <button
                 onClick={() => handleExport('txt')}
-                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium"
+                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2"
               >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
                 导出 TXT
               </button>
             </div>
@@ -339,24 +355,40 @@ export default function WordListWords() {
                       <div className="flex-1">
                         <div className="flex items-center space-x-3 mb-2">
                           <h3 className="text-lg font-semibold text-gray-900">{word.word}</h3>
-                          {word.pronunciation && (
-                            <span className="text-gray-600 text-sm">/{word.pronunciation}/</span>
-                          )}
-                          {word.part_of_speech && (
-                            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                              {word.part_of_speech}
-                            </span>
-                          )}
+                          
+                          {/* 发音按钮 */}
+                          <div className="flex items-center space-x-2">
+                            {word.BrE && (
+                              <button
+                                onClick={() => playPronunciation(word.word, 'uk')}
+                                className="flex items-center space-x-1 text-blue-600 hover:text-blue-800 text-sm"
+                                title="英式发音"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
+                                </svg>
+                                <span>英 {word.BrE}</span>
+                              </button>
+                            )}
+                            {word.AmE && (
+                              <button
+                                onClick={() => playPronunciation(word.word, 'us')}
+                                className="flex items-center space-x-1 text-red-600 hover:text-red-800 text-sm"
+                                title="美式发音"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
+                                </svg>
+                                <span>美 {word.AmE}</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {filters.showDefinition && (
-                          <p className="text-gray-700 mb-2">{word.definition}</p>
-                        )}
-
-                        {word.example_sentence && (
-                          <p className="text-sm text-gray-600 italic">
-                            例句: {word.example_sentence}
-                          </p>
+                          <div className="text-gray-700 mb-2 whitespace-pre-wrap leading-relaxed">
+                            {word.definition}
+                          </div>
                         )}
                       </div>
 
@@ -396,21 +428,30 @@ export default function WordListWords() {
             <div className="flex space-x-2">
               <button
                 onClick={() => handleExport('pdf')}
-                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm"
+                className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
               >
-                导出 PDF
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                PDF
               </button>
               <button
                 onClick={() => handleExport('csv')}
-                className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm"
+                className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
               >
-                导出 CSV
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                CSV
               </button>
               <button
                 onClick={() => handleExport('txt')}
-                className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm"
+                className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
               >
-                导出 TXT
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                TXT
               </button>
               <button
                 onClick={() => setSelectedWords(new Set())}

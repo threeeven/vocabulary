@@ -28,7 +28,7 @@ export default function WordLists() {
         .from('word_lists')
         .select('*')
         .eq('is_public', true)
-        .order('level', { ascending: true })
+        // .order('level', { ascending: true })
         .order('name', { ascending: true })
 
       if (error) throw error
@@ -101,23 +101,23 @@ export default function WordLists() {
 
   // 移除 initializeStudyRecords 函数
 
-  const getLevelColor = (level) => {
-    const colors = {
-      beginner: 'bg-green-100 text-green-800',
-      intermediate: 'bg-yellow-100 text-yellow-800',
-      advanced: 'bg-red-100 text-red-800'
-    }
-    return colors[level] || 'bg-gray-100 text-gray-800'
-  }
+  // const getLevelColor = (level) => {
+  //   const colors = {
+  //     beginner: 'bg-green-100 text-green-800',
+  //     intermediate: 'bg-yellow-100 text-yellow-800',
+  //     advanced: 'bg-red-100 text-red-800'
+  //   }
+  //   return colors[level] || 'bg-gray-100 text-gray-800'
+  // }
 
-  const getLevelText = (level) => {
-    const texts = {
-      beginner: '初级',
-      intermediate: '中级',
-      advanced: '高级'
-    }
-    return texts[level] || level
-  }
+  // const getLevelText = (level) => {
+  //   const texts = {
+  //     beginner: '初级',
+  //     intermediate: '中级',
+  //     advanced: '高级'
+  //   }
+  //   return texts[level] || level
+  // }
 
   if (loading) {
     return (
@@ -217,9 +217,9 @@ export default function WordLists() {
                         <p className="text-gray-600 text-sm mt-1 line-clamp-2">{list.description}</p>
                       )}
                     </div>
-                    <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getLevelColor(list.level)}`}>
+                    {/* <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getLevelColor(list.level)}`}>
                       {getLevelText(list.level)}
-                    </span>
+                    </span> */}
                   </div>
                   
                   <div className="flex justify-between items-center text-sm text-gray-500 mb-4">

@@ -33,7 +33,6 @@ export default function StudyPage() {
             name,
             description,
             word_count,
-            level,
             language
           )
         `)
@@ -106,7 +105,7 @@ export default function StudyPage() {
               )}
               <div className="flex justify-between items-center text-sm text-gray-500 mb-4">
                 <span>{list.word_count} 个单词</span>
-                <span>{list.level === 'beginner' ? '初级' : list.level === 'intermediate' ? '中级' : '高级'}</span>
+                {/* <span>{list.level === 'beginner' ? '初级' : list.level === 'intermediate' ? '中级' : '高级'}</span> */}
               </div>
               <button
                 onClick={() => startStudy(list.id)}
