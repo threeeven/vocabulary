@@ -53,83 +53,133 @@ export const orderOptionsDict = {
   [OrderOption.RANDOM]: '随机顺序'
 }
 
-// 缓存字体状态
-let chineseFontLoaded = false
-let englishFontLoaded = false
-let cachedFonts = null
+// ========== 字体缓存解决方案 ==========
+// 使用模块级别的缓存，在同一个请求内有效
+let fontCache = null;
+let fontRegistrationStatus = {
+  chinese: false,
+  english: false
+};
+
+// 重置字体缓存 - 每次导出前调用
+export const resetFontCache = () => {
+  fontCache = null;
+  fontRegistrationStatus = {
+    chinese: false,
+    english: false
+  };
+  console.log('字体缓存已重置');
+}
 
 // 加载字体
 const loadFonts = async () => {
-  if (cachedFonts) return cachedFonts
+  // 如果当前请求内已经加载过字体，直接返回
+  if (fontCache) {
+    console.log('使用缓存的字体');
+    return fontCache;
+  }
   
   try {
+    console.log('开始加载字体...');
+    
     // 加载中文字体
-    const chineseFontResponse = await fetch(`/fonts/${FONT_CONFIG.chinese.fileName}`)
-    const chineseFontArrayBuffer = await chineseFontResponse.arrayBuffer()
-    const chineseFontBase64 = btoa(
-      new Uint8Array(chineseFontArrayBuffer).reduce(
-        (data, byte) => data + String.fromCharCode(byte),
-        ''
-      )
-    )
+    const chineseFontResponse = await fetch(`/fonts/${FONT_CONFIG.chinese.fileName}`);
+    if (!chineseFontResponse.ok) {
+      throw new Error(`中文字体加载失败: ${chineseFontResponse.status}`);
+    }
+    const chineseFontArrayBuffer = await chineseFontResponse.arrayBuffer();
+    const chineseFontBase64 = arrayBufferToBase64(chineseFontArrayBuffer);
 
     // 加载英文字体
-    const englishFontResponse = await fetch(`/fonts/${FONT_CONFIG.english.fileName}`)
-    const englishFontArrayBuffer = await englishFontResponse.arrayBuffer()
-    const englishFontBase64 = btoa(
-      new Uint8Array(englishFontArrayBuffer).reduce(
-        (data, byte) => data + String.fromCharCode(byte),
-        ''
-      )
-    )
+    const englishFontResponse = await fetch(`/fonts/${FONT_CONFIG.english.fileName}`);
+    if (!englishFontResponse.ok) {
+      throw new Error(`英文字体加载失败: ${englishFontResponse.status}`);
+    }
+    const englishFontArrayBuffer = await englishFontResponse.arrayBuffer();
+    const englishFontBase64 = arrayBufferToBase64(englishFontArrayBuffer);
 
-    cachedFonts = {
+    console.log('字体加载完成');
+    
+    fontCache = {
       chineseFont: chineseFontBase64,
       englishFont: englishFontBase64
-    }
-    return cachedFonts
+    };
+    
+    return fontCache;
   } catch (error) {
-    console.error('字体加载失败:', error)
-    return null
+    console.error('字体加载失败:', error);
+    // 加载失败时也设置缓存，避免重复尝试
+    fontCache = { error: true };
+    return null;
   }
+}
+
+// 辅助函数：ArrayBuffer 转 Base64
+const arrayBufferToBase64 = (buffer) => {
+  return btoa(
+    new Uint8Array(buffer).reduce(
+      (data, byte) => data + String.fromCharCode(byte),
+      ''
+    )
+  );
 }
 
 // 设置字体的辅助函数
 const setFont = (pdf, fontType) => {
-  const config = FONT_CONFIG[fontType]
-  if (fontType === 'chinese' && chineseFontLoaded) {
-    pdf.setFont(config.name, 'normal')
-  } else if (fontType === 'english' && englishFontLoaded) {
-    pdf.setFont(config.name, 'normal')
-  } else {
-    pdf.setFont(config.fallback, 'normal')
+  const config = FONT_CONFIG[fontType];
+  try {
+    // 直接尝试设置字体
+    pdf.setFont(config.name, 'normal');
+  } catch (error) {
+    // 字体未注册，使用回退字体
+    console.warn(`字体 ${config.name} 未注册，使用回退字体 ${config.fallback}`);
+    pdf.setFont(config.fallback, 'normal');
   }
 }
 
 // 注册字体到PDF实例
 const registerFontsToPDF = async (pdf) => {
-  if (!chineseFontLoaded || !englishFontLoaded) {
-    const fonts = await loadFonts()
-    if (fonts) {
-      try {
-        // 注册中文字体
-        pdf.addFileToVFS(FONT_CONFIG.chinese.fileName, fonts.chineseFont)
-        pdf.addFont(FONT_CONFIG.chinese.fileName, FONT_CONFIG.chinese.name, 'normal')
-        chineseFontLoaded = true
-      } catch (chineseFontError) {
-        console.warn('中文字体注册失败，使用默认字体:', chineseFontError)
-      }
-
-      try {
-        // 注册英文字体
-        pdf.addFileToVFS(FONT_CONFIG.english.fileName, fonts.englishFont)
-        pdf.addFont(FONT_CONFIG.english.fileName, FONT_CONFIG.english.name, 'normal')
-        englishFontLoaded = true
-      } catch (englishFontError) {
-        console.warn('英文字体注册失败，使用默认字体:', englishFontError)
-      }
-    }
+  // 如果字体已经注册过，直接返回
+  if (fontRegistrationStatus.chinese && fontRegistrationStatus.english) {
+    console.log('字体已注册，跳过重复注册');
+    return true;
   }
+
+  const fonts = await loadFonts();
+  if (!fonts || fonts.error) {
+    console.warn('字体加载失败，使用默认字体');
+    return false;
+  }
+
+  let success = true;
+
+  try {
+    if (!fontRegistrationStatus.chinese) {
+      console.log('注册中文字体...');
+      pdf.addFileToVFS(FONT_CONFIG.chinese.fileName, fonts.chineseFont);
+      pdf.addFont(FONT_CONFIG.chinese.fileName, FONT_CONFIG.chinese.name, 'normal');
+      fontRegistrationStatus.chinese = true;
+      console.log('中文字体注册成功');
+    }
+  } catch (chineseFontError) {
+    console.warn('中文字体注册失败，使用默认字体:', chineseFontError);
+    success = false;
+  }
+
+  try {
+    if (!fontRegistrationStatus.english) {
+      console.log('注册英文字体...');
+      pdf.addFileToVFS(FONT_CONFIG.english.fileName, fonts.englishFont);
+      pdf.addFont(FONT_CONFIG.english.fileName, FONT_CONFIG.english.name, 'normal');
+      fontRegistrationStatus.english = true;
+      console.log('英文字体注册成功');
+    }
+  } catch (englishFontError) {
+    console.warn('英文字体注册失败，使用默认字体:', englishFontError);
+    success = false;
+  }
+
+  return success;
 }
 
 // 文本换行处理
@@ -162,6 +212,9 @@ const wrapText = (pdf, text, maxWidth) => {
 
 // 显示音标的PDF导出函数
 export const exportToPDFWithPronunciation = async (wordData, wordListName) => {
+  // 重置字体缓存，确保每次导出都重新加载
+  resetFontCache();
+  
   try {
     const pdf = new jsPDF('p', 'mm', 'a4')
     await registerFontsToPDF(pdf)
@@ -255,6 +308,8 @@ export const exportToPDFWithPronunciation = async (wordData, wordListName) => {
 
   } catch (error) {
     console.error('PDF导出失败:', error)
+    // 发生错误时重置缓存
+    resetFontCache();
     throw new Error('PDF导出失败: ' + error.message)
   }
 }
@@ -353,7 +408,6 @@ const exportToPDFCompact = async (pdf, wordData, wordListName, orderChoice) => {
   return pdf
 }
 
-// utils/exportUtils.js - 重写 exportToPDFRegular 函数
 // 常规模式PDF导出（纵向/横向）- 完全重写的表格实现
 const exportToPDFRegular = async (pdf, wordData, wordListName, direction, dictationMode) => {
   await registerFontsToPDF(pdf)
@@ -552,6 +606,9 @@ const addFooter = (pdf) => {
 
 // 主PDF导出函数
 export const exportToPDFWithOptions = async (wordData, wordListName, direction, dictationMode, orderChoice) => {
+  // 重置字体缓存，确保每次导出都重新加载
+  resetFontCache();
+  
   try {
     let pdf
     
@@ -590,6 +647,8 @@ export const exportToPDFWithOptions = async (wordData, wordListName, direction, 
     
   } catch (error) {
     console.error('PDF导出失败:', error)
+    // 发生错误时重置缓存
+    resetFontCache();
     throw new Error('PDF导出失败: ' + error.message)
   }
 }
