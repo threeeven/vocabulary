@@ -21,6 +21,8 @@ const OrderOption = {
   RANDOM: '3'
 }
 
+export const runtime = 'edge';
+
 export default function WordListWords() {
   const { user } = useAuth()
   const params = useParams()

@@ -7,6 +7,8 @@ import { useParams, useRouter } from 'next/navigation'
 import WordCard from '@/components/WordCard'
 import { StudySession } from '@/lib/studySession'
 
+export const runtime = 'edge';
+
 export default function WordListStudy() {
   const { user } = useAuth()
   const params = useParams()
