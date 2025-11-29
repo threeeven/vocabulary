@@ -1,261 +1,511 @@
-// app/dashboard/word-lists/[wordListId]/words/WordListWordsClient.js
+// app/dashboard/study/[wordListId]/StudyClient.js
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useAuth } from '@/context/AuthContext'
 import { createClient } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
-import Link from 'next/link'
-import {  
-  exportToCSVWords, 
-  exportToTXTWords,
-  PDFDirection,
-  DictationOption,
-  exportToPDFWithOptions,
-  exportToPDFWithPronunciation
-} from '@/utils/exportUtils'
+import { useParams, useRouter } from 'next/navigation'
+import WordCard from '@/components/WordCard'
+import { StudySession } from '@/lib/studySession'
 
-// 定义 OrderOption
-const OrderOption = {
-  DEFAULT: '1',
-  ALPHABETICAL: '2',
-  RANDOM: '3'
-}
-
-export default function WordListWordsClient({ 
+export default function StudyClient({ 
   user,
   wordListId,
-  initialWordListInfo,
-  initialWords = []
+  initialUserSettings = { daily_goal: 10 },
+  initialWordListInfo = null
 }) {
+  const { user: authUser } = useAuth()
+  const params = useParams()
   const router = useRouter()
-  const [words, setWords] = useState(initialWords)
-  const [wordListInfo, setWordListInfo] = useState(initialWordListInfo)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [filters, setFilters] = useState({
-    status: 'all',
-    showDefinition: true
+  const currentWordListId = wordListId || params.wordListId
+  const [words, setWords] = useState([])
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState({
+    total: 0,
+    learned: 0,
+    reviewing: 0
   })
-  const [selectedWords, setSelectedWords] = useState(new Set())
-  const [selectAll, setSelectAll] = useState(false)
-  const [sortOption, setSortOption] = useState('id_asc')
-  const [searchKeyword, setSearchKeyword] = useState('') // 新增搜索关键词状态
+  const [sessionComplete, setSessionComplete] = useState(false)
+  const [dailyGoal, setDailyGoal] = useState(initialUserSettings.daily_goal)
+  const [wordListInfo, setWordListInfo] = useState(initialWordListInfo)
+  const [pageError, setPageError] = useState('')
+  const [isVisible, setIsVisible] = useState(true)
   const supabase = createClient()
 
-  // 排序选项
-  const sortOptions = [
-    { value: 'word_asc', label: '单词 A-Z' },
-    { value: 'word_desc', label: '单词 Z-A' },
-    { value: 'id_asc', label: '词库顺序' },
-    { value: 'created_at_desc', label: '最近添加' }
-  ]
+  // 修复：确保 studySession 正确初始化
+  const [studySession, setStudySession] = useState(null)
 
-  // 客户端排序函数
-  const sortedWords = useMemo(() => {
-    const sorted = [...words]
-    
-    switch (sortOption) {
-      case 'word_asc':
-        return sorted.sort((a, b) => a.word.localeCompare(b.word))
-      case 'word_desc':
-        return sorted.sort((a, b) => b.word.localeCompare(a.word))
-      case 'id_asc':
-        return sorted.sort((a, b) => a.id - b.id)
-      case 'created_at_desc':
-        return sorted.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-      default:
-        return sorted
-    }
-  }, [words, sortOption])
-
-  // 搜索过滤函数
-  const searchFilteredWords = useMemo(() => {
-    if (!searchKeyword.trim()) {
-      return sortedWords
-    }
-    
-    const keyword = searchKeyword.toLowerCase().trim()
-    return sortedWords.filter(word => 
-      word.word.toLowerCase().includes(keyword) ||
-      (word.definition && word.definition.toLowerCase().includes(keyword)) ||
-      (word.BrE && word.BrE.toLowerCase().includes(keyword)) ||
-      (word.AmE && word.AmE.toLowerCase().includes(keyword))
-    )
-  }, [sortedWords, searchKeyword])
-
-  // 状态过滤单词
-  const filteredWords = useMemo(() => {
-    return searchFilteredWords.filter(word => {
-      if (filters.status === 'learned') return word.learned
-      if (filters.status === 'unlearned') return !word.learned
-      return true
-    })
-  }, [searchFilteredWords, filters.status])
-
-  // 选择对话框函数（保持不变）
-  const selectPDFDirection = async () => {
-    return new Promise((resolve) => {
-      const direction = window.prompt(
-        '请选择页面方向：\n1. 纵向\n2. 横向\n3. 紧凑模式\n\n请输入数字：',
-        '1'
-      )
+  // 页面可见性检测
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState === 'visible'
+      console.log(`🔄 页面可见性变化: ${visible ? '可见' : '隐藏'}`)
+      setIsVisible(visible)
       
-      switch (direction) {
-        case '1':
-          resolve(PDFDirection.LONGITUDINAL)
-          break
-        case '2':
-          resolve(PDFDirection.HORIZONTAL)
-          break
-        case '3':
-          resolve(PDFDirection.COMPACT)
-          break
-        default:
-          resolve(PDFDirection.LONGITUDINAL)
+      if (visible && studySession) {
+        // 页面重新可见时，检查连接并刷新数据
+        checkConnectionAndRefresh()
       }
-    })
-  }
+    }
 
-  const selectDictationMode = async () => {
-    return new Promise((resolve) => {
-      const mode = window.prompt(
-        '请选择默写模式：\n1. 关闭默写\n2. 默写英文\n3. 默写中文\n\n请输入数字：',
-        '1'
-      )
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [studySession])
+
+  // 检查连接并刷新
+  const checkConnectionAndRefresh = useCallback(async () => {
+    if (!studySession) return
+    
+    try {
+      console.log('🔍 检查连接状态...')
+      const isConnected = await studySession.checkConnection()
       
-      switch (mode) {
-        case '1':
-          resolve(DictationOption.DICTATION_OFF)
-          break
-        case '2':
-          resolve(DictationOption.DICTATION_EN)
-          break
-        case '3':
-          resolve(DictationOption.DICTATION_CH)
-          break
-        default:
-          resolve(DictationOption.DICTATION_OFF)
+      if (isConnected) {
+        console.log('✅ 连接正常')
+        // 可以在这里触发数据刷新，或者依赖现有的缓存机制
+      } else {
+        console.warn('⚠️ 连接异常，使用缓存数据')
       }
-    })
-  }
+    } catch (error) {
+      console.warn('⚠️ 连接检查失败:', error.message)
+    }
+  }, [studySession])
 
-  // 发音功能（保持不变）
-  const playPronunciation = (word, type = 'us') => {
+  useEffect(() => {
+    const currentUser = user || authUser
+    if (currentUser && currentWordListId) {
+      console.log('🔧 初始化 StudySession', {
+        userId: currentUser.id,
+        wordListId: currentWordListId
+      })
+      try {
+        const session = new StudySession(currentUser.id, currentWordListId)
+        setStudySession(session)
+      } catch (error) {
+        console.error('❌ StudySession 初始化失败:', error)
+        setPageError('学习会话初始化失败: ' + error.message)
+        setLoading(false)
+      }
+    }
+  }, [user, authUser, currentWordListId])
+
+  // 发音功能
+  const playPronunciation = useCallback((word, type = 'us') => {
     const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type === 'uk' ? 1 : 2}`
     const audio = new Audio(audioUrl)
     audio.play().catch(error => {
       console.error('播放发音失败:', error)
     })
-  }
+  }, [])
 
-  // 处理单词选择（保持不变）
-  const handleWordSelect = (wordId) => {
-    const newSelected = new Set(selectedWords)
-    if (newSelected.has(wordId)) {
-      newSelected.delete(wordId)
-    } else {
-      newSelected.add(wordId)
+  // 认证检查
+  useEffect(() => {
+    const currentUser = user || authUser
+    if (!currentUser) {
+      console.log('用户未登录，重定向到首页')
+      window.location.href = '/'
+      return
     }
-    setSelectedWords(newSelected)
-    setSelectAll(newSelected.size === filteredWords.length)
-  }
 
-  // 全选/取消全选（保持不变）
-  const handleSelectAll = () => {
-    if (selectAll) {
-      setSelectedWords(new Set())
-    } else {
-      const allWordIds = new Set(filteredWords.map(word => word.id))
-      setSelectedWords(allWordIds)
+    // 如果已经有基础数据和 studySession，开始获取学习数据
+    if (initialWordListInfo && studySession) {
+      fetchStudyWords()
+    } else if (studySession) {
+      // 如果没有基础数据，先获取词库信息
+      fetchWordListInfo()
     }
-    setSelectAll(!selectAll)
-  }
+  }, [user, authUser, initialWordListInfo, studySession])
 
-  // PDF导出处理函数（保持不变）
-  const handlePDFExport = async (selectedWordData) => {
+  // 获取词库信息
+  const fetchWordListInfo = useCallback(async () => {
     try {
-      const direction = await selectPDFDirection()
-      
-      let dictationMode = DictationOption.DICTATION_OFF
-      if (direction !== PDFDirection.COMPACT) {
-        dictationMode = await selectDictationMode()
+      const { data, error } = await supabase
+        .from('word_lists')
+        .select('*')
+        .eq('id', currentWordListId)
+        .single()
+
+      if (error) {
+        console.error('获取词库信息失败:', error)
+        setPageError('词库不存在或已被删除')
+        return
       }
-      
-      const orderChoice = OrderOption.DEFAULT
-      
-      await exportToPDFWithOptions(
-        selectedWordData, 
-        wordListInfo?.name || 'wordlist', 
-        direction, 
-        dictationMode, 
-        orderChoice
-      )
-      
+
+      setWordListInfo(data)
+      // 获取词库信息后开始获取学习数据
+      fetchStudyWords()
     } catch (error) {
-      console.error('PDF导出失败:', error)
-      throw error
+      console.error('获取词库信息失败:', error)
+      setPageError('获取词库信息失败')
+      setLoading(false)
+    }
+  }, [supabase, currentWordListId])
+
+  // 获取学习单词 - 优化版本
+  const fetchStudyWords = useCallback(async () => {
+    // 如果页面不可见，延迟执行或使用缓存
+    if (!isVisible) {
+      console.log('⏸️ 页面不可见，延迟数据获取')
+      return
+    }
+    
+    try {
+      setLoading(true)
+      setPageError('')
+
+      const currentUser = user || authUser
+      if (!currentUser || !studySession) {
+        setPageError('用户未登录或会话初始化失败')
+        setLoading(false)
+        return
+      }
+
+      console.log('🔍 开始获取学习单词...')
+      
+      const [studyWords, savedProgress] = await Promise.all([
+        studySession.getStudyWords(dailyGoal),
+        studySession.getProgress()
+      ])
+
+      console.log('✅ 获取学习单词完成:', studyWords.length)
+      console.log('📊 恢复的进度:', savedProgress)
+
+      // 处理没有单词的情况
+      if (studyWords.length === 0) {
+        setSessionComplete(true)
+        setLoading(false)
+        return
+      }
+
+      // 计算开始索引
+      let startIndex = 0
+      if (savedProgress && savedProgress.currentIndex > 0) {
+        startIndex = Math.min(savedProgress.currentIndex, studyWords.length - 1)
+        console.log('📈 从进度恢复学习位置:', startIndex)
+      }
+
+      setWords(studyWords)
+      setCurrentIndex(startIndex)
+
+      // 计算统计信息
+      const learnedCount = studyWords.filter(word => word.last_studied_at).length
+      const reviewingCount = studyWords.filter(word => !word.last_studied_at).length
+      
+      setStats({
+        total: studyWords.length,
+        learned: learnedCount,
+        reviewing: reviewingCount
+      })
+
+      // 如果有进度，保存当前状态
+      if (startIndex > 0) {
+        await studySession.saveProgress(startIndex, studyWords)
+      }
+
+    } catch (error) {
+      console.error('❌ 获取学习单词失败:', error)
+      setPageError('获取学习单词失败: ' + error.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [user, authUser, studySession, dailyGoal, isVisible])
+
+  // 基于记忆科学和Anki算法的复习间隔计算
+  const calculateNextReview = (familiarity, currentInterval = 1, easeFactor = 2.5, reviewCount = 0) => {
+    let newInterval
+    let newEaseFactor = easeFactor
+
+    if (reviewCount === 0) {
+      switch (familiarity) {
+        case 1:
+          newInterval = 1
+          newEaseFactor = Math.max(1.3, easeFactor - 0.2)
+          break
+        case 2:
+          newInterval = 1
+          newEaseFactor = Math.max(1.3, easeFactor - 0.15)
+          break
+        case 3:
+          newInterval = 3
+          newEaseFactor = easeFactor
+          break
+        case 4:
+          newInterval = 7
+          newEaseFactor = easeFactor + 0.1
+          break
+        default:
+          newInterval = 1
+          newEaseFactor = 2.5
+      }
+    } else {
+      switch (familiarity) {
+        case 1:
+          newInterval = 1
+          newEaseFactor = Math.max(1.3, easeFactor - 0.2)
+          break
+        case 2:
+          newInterval = Math.max(1, Math.round(currentInterval * 1.2))
+          newEaseFactor = Math.max(1.3, easeFactor - 0.15)
+          break
+        case 3:
+          newInterval = Math.round(currentInterval * easeFactor)
+          newEaseFactor = easeFactor
+          break
+        case 4:
+          newInterval = Math.round(currentInterval * easeFactor * 1.3)
+          newEaseFactor = easeFactor + 0.1
+          break
+        default:
+          newInterval = 1
+          newEaseFactor = 2.5
+      }
+    }
+
+    newInterval = Math.max(1, Math.min(newInterval, 365))
+
+    const nextReviewDate = new Date()
+    nextReviewDate.setDate(nextReviewDate.getDate() + newInterval)
+
+    return {
+      interval: newInterval,
+      easeFactor: parseFloat(newEaseFactor.toFixed(2)),
+      nextReviewAt: nextReviewDate.toISOString()
     }
   }
 
-  // 导出处理函数（保持不变）
-  const handleExport = async (format) => {
-    const selectedWordData = words.filter(word => selectedWords.has(word.id))
-    
-    if (selectedWordData.length === 0) {
-      alert('请先选择要导出的单词')
+  const handleAnswer = async (familiarity) => {
+    if (words.length === 0) return
+
+    const currentWord = words[currentIndex]
+    const now = new Date().toISOString()
+
+    try {
+        // 先定义变量，确保不会出现未定义错误
+        let studyRecordId = currentWord.study_record_id || null
+        let isNewRecord = false
+        let reviewData
+
+        console.log('处理学习记录:', { 
+        studyRecordId, 
+        wordId: currentWord.id,
+        word: currentWord.word,
+        reviewCount: currentWord.review_count || 0
+        })
+
+        // 计算复习数据
+        reviewData = calculateNextReview(
+        familiarity,
+        currentWord.interval_days || 1,
+        currentWord.ease_factor || 2.5,
+        currentWord.review_count || 0
+        )
+
+        // 如果是"忘记"（familiarity=1），不立即保存到数据库，而是重新加入学习队列
+        if (familiarity === 1) {
+        console.log('用户选择"忘记"，单词将重新加入学习队列')
+        
+        // 更新本地状态，但不保存到数据库
+        const updatedWords = [...words]
+        updatedWords[currentIndex] = {
+            ...currentWord,
+            // 不更新学习记录ID，保持原有状态
+            // 不更新熟悉度，保持原样
+            // 只标记为需要重新学习
+            needs_review: true
+        }
+        
+        // 将当前单词移到队列末尾
+        const currentWordCopy = {...updatedWords[currentIndex]}
+        updatedWords.splice(currentIndex, 1) // 移除当前位置的单词
+        updatedWords.push(currentWordCopy) // 添加到队列末尾
+        
+        setWords(updatedWords)
+        
+        // 保持当前索引不变（因为移除了当前单词，下一个单词会自动补位）
+        // 不需要保存进度到数据库
+        await studySession.saveProgress(currentIndex, updatedWords)
+        
+        return // 提前返回，不进行数据库操作
+        }
+
+        // 对于非"忘记"的情况，正常保存学习记录
+        if (!studyRecordId) {
+        // 这是一个新单词，还没有学习记录，需要创建
+        const { data: newRecord, error: createError } = await supabase
+            .from('study_records')
+            .upsert({
+            user_id: user?.id || authUser?.id,
+            word_list_id: parseInt(currentWordListId),
+            word_list_word_id: currentWord.id,
+            familiarity: familiarity,
+            review_count: 1,
+            ease_factor: reviewData.easeFactor,
+            interval_days: reviewData.interval,
+            last_studied_at: now,
+            next_review_at: reviewData.nextReviewAt
+            }, {
+            onConflict: 'user_id,word_list_id,word_list_word_id',
+            ignoreDuplicates: false
+            })
+            .select()
+            .single()
+
+        if (createError) {
+            console.error('创建学习记录失败:', createError)
+            throw createError
+        }
+
+        studyRecordId = newRecord.id
+        isNewRecord = true
+        console.log('创建新学习记录成功:', newRecord)
+        } else {
+        // 更新学习记录（如果是已存在的记录）
+        const { data: updatedRecord, error: updateError } = await supabase
+            .from('study_records')
+            .update({
+            familiarity: familiarity,
+            last_studied_at: now,
+            next_review_at: reviewData.nextReviewAt,
+            review_count: (currentWord.review_count || 0) + 1,
+            ease_factor: reviewData.easeFactor,
+            interval_days: reviewData.interval
+            })
+            .eq('id', studyRecordId)
+            .select()
+            .single()
+
+        if (updateError) {
+            console.error('更新学习记录失败:', updateError)
+            throw updateError
+        }
+        
+        console.log('更新学习记录成功:', updatedRecord)
+        }
+
+        // 更新本地状态
+        const updatedWords = [...words]
+        updatedWords[currentIndex] = {
+        ...currentWord,
+        study_record_id: studyRecordId,
+        familiarity,
+        last_studied_at: now,
+        next_review_at: reviewData.nextReviewAt,
+        review_count: (currentWord.review_count || 0) + 1,
+        ease_factor: reviewData.easeFactor,
+        interval_days: reviewData.interval,
+        needs_review: false
+        }
+        setWords(updatedWords)
+
+        // 移动到下一个单词或结束会话
+        const nextIndex = currentIndex + 1
+        if (nextIndex < words.length) {
+        setCurrentIndex(nextIndex)
+        // 保存进度到数据库和本地
+        await studySession.saveProgress(nextIndex, updatedWords)
+        } else {
+        setSessionComplete(true)
+        await studySession.clearProgress()
+        }
+    } catch (error) {
+        console.error('保存学习记录失败:', error)
+        setPageError('保存学习进度失败: ' + error.message)
+    }
+    }
+
+  // 暂停会话
+  const pauseSession = useCallback(() => {
+    if (studySession && words.length > 0) {
+      studySession.saveProgress(currentIndex, words)
+      console.log('学习已暂停，进度已保存')
+    }
+    router.push('/dashboard/study')
+  }, [studySession, words, currentIndex, router])
+
+  // 重新开始会话
+  const restartSession = useCallback(async () => {
+    if (studySession) {
+      await studySession.clearProgress()
+    }
+    setCurrentIndex(0)
+    setSessionComplete(false)
+    setWords([])
+    setLoading(true)
+    await fetchStudyWords()
+  }, [studySession, fetchStudyWords])
+
+  // 切换词库
+  const changeWordList = useCallback(() => {
+    if (studySession && words.length > 0) {
+      studySession.saveProgress(currentIndex, words)
+    }
+    router.push('/dashboard/study')
+  }, [studySession, words, currentIndex, router])
+
+  // 强制重置学习进度
+  const forceResetProgress = useCallback(async () => {
+    if (!confirm('确定要重置这个词库的所有学习进度吗？这将删除所有学习记录。')) {
       return
     }
 
     try {
-      switch (format) {
-        case 'pdf':
-          await handlePDFExport(selectedWordData)
-          break
-        case 'pdf_pronunciation':
-          await exportToPDFWithPronunciation(selectedWordData, wordListInfo?.name || 'wordlist')
-          break
-        case 'csv':
-          exportToCSVWords(selectedWordData, wordListInfo?.name || 'wordlist')
-          break
-        case 'txt':
-          exportToTXTWords(selectedWordData, wordListInfo?.name || 'wordlist')
-          break
-        default:
-          alert('不支持的导出格式')
+      const currentUser = user || authUser
+      const { error } = await supabase
+        .from('study_records')
+        .delete()
+        .eq('user_id', currentUser.id)
+        .eq('word_list_id', currentWordListId)
+
+      if (error) throw error
+
+      if (studySession) {
+        await studySession.clearProgress()
+        studySession.clearAllCache()
       }
-      
-      alert(`成功导出 ${selectedWordData.length} 个单词`)
-      
+      alert('重置成功！现在可以重新学习这个词库了。')
+      restartSession()
     } catch (error) {
-      console.error('导出失败:', error)
-      alert('导出失败，请重试')
+      console.error('重置学习进度失败:', error)
+      alert('重置失败，请重试')
     }
-  }
+  }, [user, authUser, supabase, currentWordListId, studySession, restartSession])
 
-  // 熟悉度颜色和文本函数（保持不变）
-  const getFamiliarityColor = (familiarity) => {
-    switch (familiarity) {
-      case 4: return 'text-green-600 bg-green-100'
-      case 3: return 'text-yellow-600 bg-yellow-100'
-      case 2: return 'text-orange-600 bg-orange-100'
-      case 1: return 'text-red-600 bg-red-100'
-      default: return 'text-gray-600 bg-gray-100'
+  // 手动刷新数据
+  const manualRefresh = useCallback(async () => {
+    if (studySession) {
+      studySession.clearAllCache()
     }
-  }
+    await fetchStudyWords()
+  }, [studySession, fetchStudyWords])
 
-  const getFamiliarityText = (familiarity) => {
-    switch (familiarity) {
-      case 4: return '简单'
-      case 3: return '一般'
-      case 2: return '困难'
-      case 1: return '忘记'
-      default: return '未学习'
-    }
-  }
-
-  // 错误状态组件
-  if (error && words.length === 0) {
+  // 加载状态
+  if (loading) {
     return (
-      <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-col items-center justify-center min-h-64">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4"></div>
+          <div className="text-lg text-gray-600">加载学习内容中...</div>
+          <div className="text-sm text-gray-500 mt-2">
+            {!isVisible && '页面在后台运行，恢复后继续加载...'}
+          </div>
+          {/* 添加重试按钮 */}
+          <button
+            onClick={manualRefresh}
+            className="mt-4 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm"
+          >
+            重新加载
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // 错误状态
+  if (pageError && words.length === 0) {
+    return (
+      <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
           <div className="text-red-500 mb-4">
             <svg className="mx-auto h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -263,10 +513,16 @@ export default function WordListWordsClient({
             </svg>
           </div>
           <h3 className="text-lg font-medium text-red-800 mb-2">出错了</h3>
-          <p className="text-red-700 mb-4">{error}</p>
+          <p className="text-red-700 mb-4">{pageError}</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => router.push('/dashboard/word-lists')}
+              onClick={manualRefresh}
+              className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              重新加载
+            </button>
+            <button
+              onClick={() => router.push('/dashboard/study')}
               className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-medium"
             >
               返回词库列表
@@ -277,367 +533,178 @@ export default function WordListWordsClient({
     )
   }
 
-  return (
-    <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-      {/* 页面头部 */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center space-x-2 text-sm text-gray-500 mb-2">
-              <Link href="/dashboard/word-lists" className="hover:text-gray-700">
-                词库列表
-              </Link>
-              <span>›</span>
-              <span>{wordListInfo?.name}</span>
-            </div>
-            <h1 className="text-3xl font-bold text-gray-900">{wordListInfo?.name} - 单词列表</h1>
-            <p className="text-gray-600 mt-2">
-              {wordListInfo?.description} • 共 {words.length} 个单词
-              {searchKeyword && (
-                <span className="text-blue-600 ml-2">
-                  • 搜索到 {filteredWords.length} 个结果
-                </span>
-              )}
-            </p>
+  
+  if (words.length === 0 && !loading) {
+    return (
+      <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="bg-white shadow rounded-lg p-8 text-center">
+          <div className="text-green-500 mb-4">
+            <svg className="mx-auto h-16 w-16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
           </div>
-          <Link
-            href={`/dashboard/study/${wordListId}`}
-            className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-medium"
-          >
-            开始学习
-          </Link>
+          <h3 className="text-xl font-medium text-gray-900 mb-2">太棒了！</h3>
+          <p className="text-gray-600 mb-4">今天没有需要学习的单词了</p>
+          
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 text-left">
+            <h4 className="font-medium text-blue-800 mb-2">可能的原因：</h4>
+            <ul className="text-sm text-blue-700 space-y-1">
+              <li>• 所有单词都已经学习过了</li>
+              <li>• 今日复习任务已完成</li>
+              <li>• 新单词学习已达到每日上限</li>
+              <li>• 词库中没有单词数据</li>
+            </ul>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <button
+              onClick={restartSession}
+              className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              重新检查
+            </button>
+            <button
+              onClick={() => router.push('/dashboard/study')}
+              className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              选择其他词库
+            </button>
+            <button
+              onClick={forceResetProgress}
+              className="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              重置学习进度
+            </button>
+          </div>
         </div>
       </div>
+    )
+  }
 
+  if (sessionComplete) {
+    return (
+      <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="bg-white shadow rounded-lg p-8 text-center">
+          <div className="text-blue-500 mb-4">
+            <svg className="mx-auto h-16 w-16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </div>
+          <h3 className="text-xl font-medium text-gray-900 mb-2">学习完成！</h3>
+          <p className="text-gray-600 mb-6">你已经完成了今天的学习任务</p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <button
+              onClick={restartSession}
+              className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              继续学习
+            </button>
+            <button
+              onClick={() => router.push('/dashboard/study')}
+              className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-medium"
+            >
+              选择其他词库
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const currentWord = words[currentIndex]
+
+  return (
+    <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
       {/* 错误提示 */}
-      {error && words.length > 0 && (
-        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-md p-4">
-          <div className="flex">
+      {pageError && (
+        <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center">
             <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="h-5 w-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
               </svg>
             </div>
             <div className="ml-3">
-              <p className="text-sm text-yellow-700">{error}</p>
+              <p className="text-sm text-red-700">
+                {pageError}
+                <button onClick={manualRefresh} className="ml-2 text-red-700 underline">
+                  重试
+                </button>
+              </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* 控制面板 */}
-      <div className="bg-white shadow rounded-lg p-6 mb-6">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          {/* 筛选选项 */}
-          <div className="flex flex-wrap gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">学习状态</label>
-              <select
-                value={filters.status}
-                onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
-                className="border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">全部单词 ({words.length})</option>
-                <option value="learned">已学习 ({words.filter(w => w.learned).length})</option>
-                <option value="unlearned">未学习 ({words.filter(w => !w.learned).length})</option>
-              </select>
-            </div>
-
-            <div className="flex items-center">
-              <label className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  checked={filters.showDefinition}
-                  onChange={(e) => setFilters(prev => ({ ...prev, showDefinition: e.target.checked }))}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="text-sm text-gray-700">显示释义</span>
-              </label>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">排序方式</label>
-              <select
-                value={sortOption}
-                onChange={(e) => setSortOption(e.target.value)}
-                className="border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {sortOptions.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* 搜索框 - 新增 */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">搜索单词</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={searchKeyword}
-                  onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="搜索单词或释义..."
-                  className="border border-gray-300 rounded-md pl-10 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-                />
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </div>
-                {searchKeyword && (
-                  <button
-                    onClick={() => setSearchKeyword('')}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                  >
-                    <svg className="h-4 w-4 text-gray-400 hover:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            </div>
+      {/* 学习头部信息 */}
+      <div className="mb-6">
+        <div className="flex justify-between items-start mb-2">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">
+              {wordListInfo?.name || '学习词库'}
+            </h1>
+            {wordListInfo?.description && (
+              <p className="text-gray-600 mt-1">{wordListInfo.description}</p>
+            )}
+          </div>
+          <div className="flex space-x-2">
+            <button
+              onClick={pauseSession}
+              className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-medium text-sm"
+            >
+              暂停学习
+            </button>
+            <button
+              onClick={restartSession}
+              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-medium text-sm"
+            >
+              重新开始
+            </button>
+            <button
+              onClick={changeWordList}
+              className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg font-medium text-sm"
+            >
+              切换词库
+            </button>
           </div>
         </div>
-      </div>
 
-      {/* 单词列表 */}
-      <div className="bg-white shadow rounded-lg overflow-hidden">
-        {/* 表格头部 */}
-        <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center space-x-4">
-            <label className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                checked={selectAll}
-                onChange={handleSelectAll}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span className="text-sm font-medium text-gray-700">全选</span>
-            </label>
+        {/* 学习进度 */}
+        <div className="mt-4">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-sm font-medium text-gray-700">
+              进度: {currentIndex + 1} / {words.length}
+            </span>
             <span className="text-sm text-gray-500">
-              显示 {filteredWords.length} 个单词
-              {searchKeyword && (
-                <span className="text-blue-600 ml-1">
-                  (搜索: "{searchKeyword}")
-                </span>
-              )}
+              {stats.learned} 复习 • {stats.reviewing} 新学
             </span>
           </div>
-        </div>
-
-        {/* 单词表格 */}
-        <div className="divide-y divide-gray-200">
-          {filteredWords.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="text-gray-400 mb-4">
-                <svg className="mx-auto h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              <p className="text-gray-500">
-                {searchKeyword ? `没有找到包含 "${searchKeyword}" 的单词` : '没有找到匹配的单词'}
-              </p>
-              {searchKeyword && (
-                <button
-                  onClick={() => setSearchKeyword('')}
-                  className="mt-2 text-blue-500 hover:text-blue-600 text-sm"
-                >
-                  清除搜索条件
-                </button>
-              )}
-            </div>
-          ) : (
-            filteredWords.map((word) => (
-              <WordListItem 
-                key={word.id}
-                word={word}
-                isSelected={selectedWords.has(word.id)}
-                onSelect={() => handleWordSelect(word.id)}
-                showDefinition={filters.showDefinition}
-                playPronunciation={playPronunciation}
-                getFamiliarityColor={getFamiliarityColor}
-                getFamiliarityText={getFamiliarityText}
-                searchKeyword={searchKeyword} // 传递搜索关键词用于高亮
-              />
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* 底部操作栏 */}
-      {selectedWords.size > 0 && (
-        <ExportActions 
-          selectedWordsCount={selectedWords.size}
-          onExport={handleExport}
-          onClearSelection={() => setSelectedWords(new Set())}
-        />
-      )}
-    </div>
-  )
-}
-
-// 单词列表项组件（添加搜索高亮功能）
-function WordListItem({ word, isSelected, onSelect, showDefinition, playPronunciation, getFamiliarityColor, getFamiliarityText, searchKeyword }) {
-  
-  // 高亮搜索关键词的函数
-  const highlightText = (text, keyword) => {
-    if (!keyword || !text) return text;
-    
-    const regex = new RegExp(`(${keyword})`, 'gi');
-    const parts = text.split(regex);
-    
-    return parts.map((part, index) => 
-      regex.test(part) ? (
-        <mark key={index} className="bg-yellow-200 px-1 rounded">
-          {part}
-        </mark>
-      ) : (
-        part
-      )
-    );
-  };
-
-  return (
-    <div className="px-6 py-4 hover:bg-gray-50">
-      <div className="flex items-start space-x-4">
-        {/* 选择框 */}
-        <div className="flex-shrink-0 pt-1">
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={onSelect}
-            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-          />
-        </div>
-
-        {/* 单词内容 */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <div className="flex items-center space-x-3 mb-2">
-                <h3 className="text-lg font-semibold text-gray-900">
-                  {searchKeyword ? highlightText(word.word, searchKeyword) : word.word}
-                </h3>
-                
-                {/* 发音按钮 */}
-                <div className="flex items-center space-x-2">
-                  {word.BrE && (
-                    <button
-                      onClick={() => playPronunciation(word.word, 'uk')}
-                      className="flex items-center space-x-1 text-blue-600 hover:text-blue-800 text-sm"
-                      title="英式发音"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
-                      </svg>
-                      <span>英 {word.BrE}</span>
-                    </button>
-                  )}
-                  {word.AmE && (
-                    <button
-                      onClick={() => playPronunciation(word.word, 'us')}
-                      className="flex items-center space-x-1 text-red-600 hover:text-red-800 text-sm"
-                      title="美式发音"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
-                      </svg>
-                      <span>美 {word.AmE}</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {showDefinition && (
-                <div className="text-gray-700 mb-2 whitespace-pre-wrap leading-relaxed">
-                  {searchKeyword ? highlightText(word.definition, searchKeyword) : word.definition}
-                </div>
-              )}
-            </div>
-
-            {/* 学习状态 */}
-            <div className="flex-shrink-0 text-right">
-              {word.learned ? (
-                <div className="flex items-center space-x-2">
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getFamiliarityColor(word.familiarity)}`}>
-                    {getFamiliarityText(word.familiarity)}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    复习 {word.review_count} 次
-                  </span>
-                  {word.next_review_at && (
-                    <span className="text-xs text-blue-500">
-                      下次: {new Date(word.next_review_at).toLocaleDateString()}
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                  未学习
-                </span>
-              )}
-            </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${((currentIndex + 1) / words.length) * 100}%` }}
+            ></div>
           </div>
         </div>
       </div>
-    </div>
-  )
-}
 
-// 导出操作组件（保持不变）
-function ExportActions({ selectedWordsCount, onExport, onClearSelection }) {
-  return (
-    <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-lg px-6 py-4 border border-gray-200">
-      <div className="flex items-center space-x-4">
-        <span className="text-sm font-medium text-gray-700">
-          已选择 {selectedWordsCount} 个单词
-        </span>
-        <div className="flex space-x-2">
-          <button
-            onClick={() => onExport('pdf_pronunciation')}
-            className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            PDF (音标版)
-          </button>
-          <button
-            onClick={() => onExport('pdf')}
-            className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            PDF
-          </button>
-          <button
-            onClick={() => onExport('csv')}
-            className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            CSV
-          </button>
-          <button
-            onClick={() => onExport('txt')}
-            className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm flex items-center gap-1"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            TXT
-          </button>
-          <button
-            onClick={onClearSelection}
-            className="bg-gray-500 hover:bg-gray-600 text-white px-3 py-1 rounded text-sm"
-          >
-            取消选择
-          </button>
-        </div>
+      {/* 单词卡片 */}
+      <WordCard 
+        word={currentWord} 
+        onAnswer={handleAnswer}
+        onPlayPronunciation={playPronunciation}
+      />
+
+      {/* 学习提示 */}
+      <div className="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <h4 className="font-medium text-blue-800 mb-2">学习提示</h4>
+        <ul className="text-sm text-blue-700 space-y-1">
+          <li>• 根据记忆程度选择相应的选项</li>
+          <li>• 系统会根据你的选择智能安排复习时间</li>
+          <li>• 进度会自动保存，可以随时暂停和继续</li>
+          <li>• 每日学习目标: {dailyGoal} 个新单词</li>
+          <li>• 页面切换时数据会自动缓存，恢复后快速加载</li>
+        </ul>
       </div>
     </div>
   )
