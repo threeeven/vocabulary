@@ -5,7 +5,7 @@ import "./globals.css";
 import { AuthProvider } from '@/context/AuthContext';
 import Navbar from '@/components/Navbar';
 
-export const runtime = 'edge';
+// export const runtime = 'edge';
 
 // 确保布局不会被缓存
 export const dynamic = 'force-dynamic'
