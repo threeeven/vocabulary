@@ -1,10 +1,42 @@
-// components/Navbar.tsx
+// components/Navbar.tsx - 增强退出处理
 'use client'
 import { useAuth } from '@/context/AuthContext'
 import Link from 'next/link'
+import { useState } from 'react'
 
 export default function Navbar() {
-  const { user, signOut } = useAuth()
+  const { user, signOut , signOutWithRetry} = useAuth()
+  const [isSigningOut, setIsSigningOut] = useState(false)
+
+  const handleSignOut = async () => {
+    if (isSigningOut) return
+    
+    setIsSigningOut(true)
+    try {
+      console.log('Navbar: 开始退出登录（使用重试机制）')
+      
+      // 使用带重试机制的退出函数
+      const result = await signOutWithRetry(3) // 重试3次
+      
+      if (result.error) {
+        console.error('Navbar: 退出登录失败:', result.error)
+        // 即使失败也强制重定向
+        if (typeof window !== 'undefined') {
+          window.location.replace('/')
+        }
+      } else {
+        console.log('Navbar: 退出登录成功')
+      }
+    } catch (error) {
+      console.error('Navbar: 退出登录异常:', error)
+      // 发生异常时强制重定向
+      if (typeof window !== 'undefined') {
+        window.location.replace('/')
+      }
+    } finally {
+      setIsSigningOut(false)
+    }
+  }
 
   return (
     <nav className="bg-white shadow-sm border-b">
@@ -47,12 +79,15 @@ export default function Navbar() {
           <div className="flex items-center space-x-4">
             {user ? (
               <>
-                <span className="text-gray-700 hidden sm:inline">欢迎，{user.email}</span>
+                <span className="text-gray-700 hidden sm:inline text-sm">
+                  {user.email?.split('@')[0] || user.email}
+                </span>
                 <button
-                  onClick={signOut}
-                  className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md text-sm font-medium"
+                  onClick={handleSignOut}
+                  disabled={isSigningOut}
+                  className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  退出登录
+                  {isSigningOut ? '退出中...' : '退出登录'}
                 </button>
               </>
             ) : (

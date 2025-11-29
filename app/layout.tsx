@@ -5,6 +5,10 @@ import "./globals.css";
 import { AuthProvider } from '@/context/AuthContext';
 import Navbar from '@/components/Navbar';
 
+// 确保布局不会被缓存
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],

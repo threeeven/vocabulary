@@ -64,3 +64,58 @@
 - **保持数据可导出**：在设计数据库时，就考虑到让用户能方便地导出自己的学习记录和已学单词，这会增加用户对应用的信任度。
 
 希望这份详细的指南能帮助你充满信心地踏出第一步。如果你在技术选型或某个具体功能的实现上遇到更细致的问题，欢迎随时再来提问。
+
+
+
+app
+│  globals.css
+│  layout.tsx
+│  page.tsx
+│
+├─auth
+│  ├─callback
+│  │      page.js
+│  │
+│  ├─login
+│  │      page.js
+│  │
+│  └─signup
+│          page.js
+│
+├─dashboard
+│  │  page.js
+│  │
+│  ├─settings
+│  │      page.js
+│  │
+│  ├─study
+│  │  │  page.js
+│  │  │
+│  │  └─[wordListId]
+│  │          page.js
+│  │
+│  └─word-lists
+│      │  page.js
+│      │
+│      └─[wordListId]
+│          └─words
+│                  page.js
+ components
+     Navbar.tsx
+     WordCard.js   
+ context
+     AutoContext.tsx
+lib
+│  studySession.js
+│
+└─supabase
+        client.ts
+        server.js
+public
+└─fonts
+        Andika-Regular.ttf
+        msyh.subset.ttf
+types
+      auth.ts
+utils
+      exportUtils.js

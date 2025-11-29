@@ -13,6 +13,7 @@ export interface AuthContextType {
   signUp: (email: string, password: string) => Promise<any>
   signIn: (email: string, password: string) => Promise<any>
   signOut: () => Promise<any>
+  signOutWithRetry: (retries?: number) => Promise<{ error: any }> // 新增
   resetPassword: (email: string) => Promise<any>
   updatePassword: (password: string) => Promise<any>
 }
