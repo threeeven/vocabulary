@@ -1,26 +1,35 @@
 // app/dashboard/study/[wordListId]/StudyClient.js
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { createClient } from '@/lib/supabase/client'
 import { useParams, useRouter } from 'next/navigation'
 import WordCard from '@/components/WordCard'
 import { StudySession } from '@/lib/studySession'
 
+// 使用全局变量来保持状态，避免组件重新挂载时丢失
+const globalState = {
+  studySession: null,
+  words: [],
+  currentIndex: 0,
+  isInitialized: false
+}
+
 export default function StudyClient({ 
   user,
   wordListId,
   initialUserSettings = { daily_goal: 10 },
-  initialWordListInfo = null,
-  initialStudyWords = [] // 服务端传递的学习数据
+  initialWordListInfo = null
 }) {
   const { user: authUser } = useAuth()
   const params = useParams()
   const router = useRouter()
   const currentWordListId = wordListId || params.wordListId
-  const [words, setWords] = useState(initialStudyWords) // 直接使用服务端数据
-  const [currentIndex, setCurrentIndex] = useState(0)
-  const [loading, setLoading] = useState(!initialStudyWords.length) // 如果有数据就不加载
+  
+  // 使用状态，但优先从全局状态恢复
+  const [words, setWords] = useState(globalState.words)
+  const [currentIndex, setCurrentIndex] = useState(globalState.currentIndex)
+  const [loading, setLoading] = useState(!globalState.isInitialized)
   const [stats, setStats] = useState({
     total: 0,
     learned: 0,
@@ -33,201 +42,248 @@ export default function StudyClient({
   const [isVisible, setIsVisible] = useState(true)
   const supabase = createClient()
 
-  // StudySession 实例
-  const [studySession, setStudySession] = useState(null)
+  // 使用 useRef 来持久化
+  const studySessionRef = useRef(globalState.studySession)
+  const isMountedRef = useRef(false)
+  const initializationRef = useRef(globalState.isInitialized)
+  const preventReinitializeRef = useRef(false)
 
-  // 初始化 StudySession
-  useEffect(() => {
-    const currentUser = user || authUser
-    if (currentUser && currentWordListId) {
-      console.log('🔧 初始化 StudySession', {
-        userId: currentUser.id,
-        wordListId: currentWordListId
+  // 保存状态到全局
+  const saveStateToGlobal = useCallback((session, wordsArr, index, initialized) => {
+    globalState.studySession = session
+    globalState.words = wordsArr
+    globalState.currentIndex = index
+    globalState.isInitialized = initialized
+  }, [])
+
+  // 从全局状态恢复
+  const restoreStateFromGlobal = useCallback(() => {
+    if (globalState.isInitialized && globalState.studySession) {
+      studySessionRef.current = globalState.studySession
+      setWords(globalState.words)
+      setCurrentIndex(globalState.currentIndex)
+      setLoading(false)
+      initializationRef.current = true
+      
+      // 计算统计信息
+      const learnedCount = globalState.words.filter(word => word.last_studied_at).length
+      const reviewingCount = globalState.words.filter(word => !word.last_studied_at).length
+      
+      setStats({
+        total: globalState.words.length,
+        learned: learnedCount,
+        reviewing: reviewingCount
       })
-      try {
-        const session = new StudySession(currentUser.id, currentWordListId)
-        setStudySession(session)
-      } catch (error) {
-        console.error('❌ StudySession 初始化失败:', error)
-        setPageError('学习会话初始化失败: ' + error.message)
-        setLoading(false)
+      
+      console.log('✅ 从全局状态恢复成功', {
+        wordsCount: globalState.words.length,
+        currentIndex: globalState.currentIndex
+      })
+      return true
+    }
+    return false
+  }, [])
+
+  // 简单的初始化函数
+  const initializeStudySession = useCallback(async () => {
+    if (preventReinitializeRef.current) {
+      console.log('⏹️ 防止重复初始化')
+      return
+    }
+
+    const currentUser = user || authUser
+    if (!currentUser || !currentWordListId) {
+      console.log('⏳ 等待用户信息或词库ID...')
+      return
+    }
+
+    if (initializationRef.current && studySessionRef.current) {
+      console.log('✅ StudySession 已初始化，跳过')
+      return
+    }
+
+    console.log('🔧 开始初始化 StudySession', {
+      userId: currentUser.id,
+      wordListId: currentWordListId
+    })
+
+    preventReinitializeRef.current = true
+
+    try {
+      const session = StudySession.getInstance(currentUser.id, currentWordListId)
+      
+      // 验证实例是否有效
+      if (session && session.isValid && session.isValid()) {
+        studySessionRef.current = session
+        
+        console.log('✅ StudySession 初始化成功')
+        
+        // 立即开始获取数据
+        await fetchStudyData()
+      } else {
+        throw new Error('StudySession 实例无效')
       }
+    } catch (error) {
+      console.error('❌ StudySession 初始化失败:', error)
+      setPageError('学习会话初始化失败: ' + error.message)
+      setLoading(false)
+      preventReinitializeRef.current = false
     }
   }, [user, authUser, currentWordListId])
 
-  // 页面可见性检测
+  // 获取学习数据
+  const fetchStudyData = useCallback(async () => {
+    if (!studySessionRef.current) {
+      console.log('⏳ 等待 StudySession 初始化...')
+      return
+    }
+
+    try {
+      setLoading(true)
+      setPageError('')
+
+      console.log('🔍 开始获取学习数据...')
+      
+      const [studyWords, savedProgress] = await Promise.all([
+        studySessionRef.current.getStudyWords(dailyGoal),
+        studySessionRef.current.getProgress()
+      ])
+
+      console.log('✅ 获取学习数据完成:', {
+        wordsCount: studyWords.length,
+        hasProgress: !!savedProgress
+      })
+
+      // 处理没有单词的情况
+      if (studyWords.length === 0) {
+        setSessionComplete(true)
+        setLoading(false)
+        saveStateToGlobal(studySessionRef.current, [], 0, true)
+        return
+      }
+
+      // 计算开始索引
+      let startIndex = 0
+      if (savedProgress && savedProgress.currentIndex > 0) {
+        startIndex = Math.min(savedProgress.currentIndex, studyWords.length - 1)
+        console.log('📈 从进度恢复学习位置:', startIndex)
+      }
+
+      setWords(studyWords)
+      setCurrentIndex(startIndex)
+
+      // 计算统计信息
+      const learnedCount = studyWords.filter(word => word.last_studied_at).length
+      const reviewingCount = studyWords.filter(word => !word.last_studied_at).length
+      
+      setStats({
+        total: studyWords.length,
+        learned: learnedCount,
+        reviewing: reviewingCount
+      })
+
+      // 保存到全局状态
+      saveStateToGlobal(studySessionRef.current, studyWords, startIndex, true)
+      initializationRef.current = true
+
+      // 如果有进度，保存当前状态
+      if (startIndex > 0) {
+        await studySessionRef.current.saveProgress(startIndex, studyWords)
+      }
+
+    } catch (error) {
+      console.error('❌ 获取学习数据失败:', error)
+      setPageError('获取学习数据失败: ' + error.message)
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false)
+      }
+    }
+  }, [dailyGoal, saveStateToGlobal])
+
+  // 页面可见性检测 - 修复版本
   useEffect(() => {
     const handleVisibilityChange = () => {
       const visible = document.visibilityState === 'visible'
       console.log(`🔄 页面可见性变化: ${visible ? '可见' : '隐藏'}`)
       setIsVisible(visible)
       
-      if (visible && studySession) {
-        // 页面重新可见时，静默刷新数据
-        console.log('🔍 页面重新可见，静默刷新数据...')
-        fetchStudyWords(false).then(newWords => {
-          if (newWords && newWords.length > 0) {
-            console.log('✅ 静默刷新完成')
-          }
-        })
+      if (visible) {
+        // 页面重新可见时，尝试从全局状态恢复
+        console.log('🔄 页面恢复可见，尝试恢复状态')
+        const restored = restoreStateFromGlobal()
+        if (restored) {
+          console.log('✅ 状态恢复成功')
+        } else {
+          console.log('❌ 状态恢复失败，需要重新初始化')
+        }
       }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [studySession])
+  }, [restoreStateFromGlobal])
 
-  // 发音功能
-  const playPronunciation = useCallback((word, type = 'us') => {
-    const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type === 'uk' ? 1 : 2}`
-    const audio = new Audio(audioUrl)
-    audio.play().catch(error => {
-      console.error('播放发音失败:', error)
-    })
-  }, [])
-
-  // 认证检查
+  // 主初始化效果 - 修复版本
   useEffect(() => {
-    const currentUser = user || authUser
-    if (!currentUser) {
-      console.log('用户未登录，重定向到首页')
-      window.location.href = '/'
+    isMountedRef.current = true
+    console.log('🏁 组件挂载')
+
+    // 首先尝试从全局状态恢复
+    const restored = restoreStateFromGlobal()
+    if (restored) {
+      console.log('✅ 从全局状态恢复完成')
       return
     }
 
-    // 如果有服务端数据，直接使用
-    if (initialStudyWords.length > 0 && studySession) {
-      console.log('✅ 使用服务端学习数据:', initialStudyWords.length)
-      initializeWithServerData(initialStudyWords)
-    } else if (studySession) {
-      // 没有服务端数据时才从客户端获取
-      console.log('🔄 服务端无数据，从客户端获取...')
-      fetchStudyWords(false)
-    }
-  }, [user, authUser, studySession, initialStudyWords])
-
-  // 使用服务端数据初始化
-  const initializeWithServerData = useCallback(async (studyWords) => {
-    if (studyWords.length === 0) {
-      setSessionComplete(true)
-      setLoading(false)
-      return
-    }
-
-    // 计算统计信息
-    const learnedCount = studyWords.filter(word => word.last_studied_at).length
-    const reviewingCount = studyWords.filter(word => !word.last_studied_at).length
-    
-    setStats({
-      total: studyWords.length,
-      learned: learnedCount,
-      reviewing: reviewingCount
-    })
-
-    // 恢复进度
-    await restoreProgress(studyWords)
-    setLoading(false)
-  }, [])
-
-  // 恢复进度
-  const restoreProgress = useCallback(async (studyWords) => {
-    if (!studySession || studyWords.length === 0) return
-    
-    try {
-      const savedProgress = await studySession.getProgress()
-      if (savedProgress && savedProgress.currentIndex > 0) {
-        const startIndex = Math.min(savedProgress.currentIndex, studyWords.length - 1)
-        setCurrentIndex(startIndex)
-        console.log('📊 从进度恢复:', startIndex)
-        
-        // 保存当前状态
-        await studySession.saveProgress(startIndex, studyWords)
+    // 如果没有全局状态，则进行初始化
+    console.log('🔄 没有找到全局状态，开始初始化')
+    const timer = setTimeout(() => {
+      if (isMountedRef.current) {
+        initializeStudySession()
       }
-    } catch (error) {
-      console.warn('恢复进度失败:', error)
-    }
-  }, [studySession])
+    }, 100)
 
-  // 获取学习单词（主要用于刷新）
-  const fetchStudyWords = useCallback(async (useCache = true) => {
-    // 如果页面不可见，延迟执行
-    if (!isVisible) {
-      console.log('⏸️ 页面不可见，延迟数据获取')
-      return words
+    return () => {
+      console.log('🧹 组件卸载 - 但保留全局状态')
+      isMountedRef.current = false
+      clearTimeout(timer)
+      // 注意：我们不在卸载时清理全局状态，这样页面切换回来时可以恢复
     }
+  }, [initializeStudySession, restoreStateFromGlobal])
 
-    // 如果已经有数据且使用缓存，直接返回
-    if (useCache && words.length > 0) {
-      return words
-    }
-
-    try {
-      setLoading(true)
+  // 当用户或词库ID变化时重新初始化
+  useEffect(() => {
+    if (isMountedRef.current && (user?.id || authUser?.id) && currentWordListId) {
+      // 检查是否需要重新初始化（用户或词库变化）
       const currentUser = user || authUser
-      if (!currentUser || !studySession) {
-        setPageError('用户未登录或会话初始化失败')
-        setLoading(false)
-        return words
-      }
-
-      console.log('🔄 客户端获取学习数据...')
-      const studyWords = await studySession.getStudyWords(dailyGoal)
-      
-      // 只有在确实需要更新时才设置状态
-      if (studyWords.length !== words.length || JSON.stringify(studyWords) !== JSON.stringify(words)) {
-        setWords(studyWords)
+      if (studySessionRef.current && 
+          (studySessionRef.current.userId !== currentUser.id || 
+           studySessionRef.current.wordListId !== currentWordListId)) {
         
-        // 更新统计信息
-        const learnedCount = studyWords.filter(word => word.last_studied_at).length
-        const reviewingCount = studyWords.filter(word => !word.last_studied_at).length
+        console.log('🔄 用户或词库变化，重新初始化')
+        // 重置状态
+        initializationRef.current = false
+        preventReinitializeRef.current = false
+        saveStateToGlobal(null, [], 0, false)
         
-        setStats({
-          total: studyWords.length,
-          learned: learnedCount,
-          reviewing: reviewingCount
-        })
+        // 重新初始化
+        const timer = setTimeout(() => {
+          if (isMountedRef.current) {
+            initializeStudySession()
+          }
+        }, 100)
 
-        // 恢复进度
-        await restoreProgress(studyWords)
+        return () => clearTimeout(timer)
       }
-      
-      return studyWords
-    } catch (error) {
-      console.error('❌ 客户端获取学习数据失败:', error)
-      setPageError('获取学习数据失败: ' + error.message)
-      // 保持现有数据，不抛出错误
-      return words
-    } finally {
-      setLoading(false)
     }
-  }, [user, authUser, studySession, dailyGoal, words, isVisible, restoreProgress])
-
-  // 获取词库信息（备用）
-  const fetchWordListInfo = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
-        .from('word_lists')
-        .select('*')
-        .eq('id', currentWordListId)
-        .single()
-
-      if (error) {
-        console.error('获取词库信息失败:', error)
-        setPageError('词库不存在或已被删除')
-        return
-      }
-
-      setWordListInfo(data)
-    } catch (error) {
-      console.error('获取词库信息失败:', error)
-      setPageError('获取词库信息失败')
-    }
-  }, [supabase, currentWordListId])
+  }, [user?.id, authUser?.id, currentWordListId, initializeStudySession, saveStateToGlobal])
 
   // 基于记忆科学和Anki算法的复习间隔计算
-  const calculateNextReview = (familiarity, currentInterval = 1, easeFactor = 2.5, reviewCount = 0) => {
+  const calculateNextReview = useCallback((familiarity, currentInterval = 1, easeFactor = 2.5, reviewCount = 0) => {
     let newInterval
     let newEaseFactor = easeFactor
 
@@ -287,26 +343,28 @@ export default function StudyClient({
       easeFactor: parseFloat(newEaseFactor.toFixed(2)),
       nextReviewAt: nextReviewDate.toISOString()
     }
-  }
+  }, [])
 
-  // 处理答案
   const handleAnswer = async (familiarity) => {
-    if (words.length === 0) return
+    if (words.length === 0 || !studySessionRef.current) {
+      console.error('❌ 无法处理答案: 单词列表为空或StudySession未初始化')
+      return
+    }
 
     const currentWord = words[currentIndex]
     const now = new Date().toISOString()
 
+    console.log('🎯 处理学习记录:', { 
+      studyRecordId: currentWord.study_record_id, 
+      wordId: currentWord.id,
+      word: currentWord.word,
+      familiarity,
+      reviewCount: currentWord.review_count || 0
+    })
+
     try {
       let studyRecordId = currentWord.study_record_id || null
-      let isNewRecord = false
       let reviewData
-
-      console.log('处理学习记录:', { 
-        studyRecordId, 
-        wordId: currentWord.id,
-        word: currentWord.word,
-        reviewCount: currentWord.review_count || 0
-      })
 
       // 计算复习数据
       reviewData = calculateNextReview(
@@ -316,11 +374,12 @@ export default function StudyClient({
         currentWord.review_count || 0
       )
 
-      // 如果是"忘记"（familiarity=1），不立即保存到数据库，而是重新加入学习队列
+      console.log('📊 计算的复习数据:', reviewData)
+
+      // 如果是"忘记"（familiarity=1），重新加入学习队列
       if (familiarity === 1) {
-        console.log('用户选择"忘记"，单词将重新加入学习队列')
+        console.log('❌ 用户选择"忘记"，单词将重新加入学习队列')
         
-        // 更新本地状态，但不保存到数据库
         const updatedWords = [...words]
         updatedWords[currentIndex] = {
           ...currentWord,
@@ -333,20 +392,22 @@ export default function StudyClient({
         updatedWords.push(currentWordCopy)
         
         setWords(updatedWords)
+        // 更新全局状态
+        saveStateToGlobal(studySessionRef.current, updatedWords, currentIndex, true)
+        await studySessionRef.current.saveProgress(currentIndex, updatedWords)
         
-        // 保持当前索引不变（因为移除了当前单词，下一个单词会自动补位）
-        await studySession.saveProgress(currentIndex, updatedWords)
-        
+        console.log('✅ 单词已重新加入队列')
         return
       }
 
       // 对于非"忘记"的情况，正常保存学习记录
+      const currentUser = user || authUser
       if (!studyRecordId) {
-        // 创建新学习记录
+        console.log('🆕 创建新学习记录...')
         const { data: newRecord, error: createError } = await supabase
           .from('study_records')
           .upsert({
-            user_id: user?.id || authUser?.id,
+            user_id: currentUser?.id,
             word_list_id: parseInt(currentWordListId),
             word_list_word_id: currentWord.id,
             familiarity: familiarity,
@@ -356,23 +417,21 @@ export default function StudyClient({
             last_studied_at: now,
             next_review_at: reviewData.nextReviewAt
           }, {
-            onConflict: 'user_id,word_list_id,word_list_word_id',
-            ignoreDuplicates: false
+            onConflict: 'user_id,word_list_id,word_list_word_id'
           })
           .select()
           .single()
 
         if (createError) {
-          console.error('创建学习记录失败:', createError)
+          console.error('❌ 创建学习记录失败:', createError)
           throw createError
         }
 
         studyRecordId = newRecord.id
-        isNewRecord = true
-        console.log('创建新学习记录成功:', newRecord)
+        console.log('✅ 创建新学习记录成功:', newRecord)
       } else {
-        // 更新学习记录
-        const { data: updatedRecord, error: updateError } = await supabase
+        console.log('📝 更新学习记录...')
+        const { error: updateError } = await supabase
           .from('study_records')
           .update({
             familiarity: familiarity,
@@ -383,18 +442,16 @@ export default function StudyClient({
             interval_days: reviewData.interval
           })
           .eq('id', studyRecordId)
-          .select()
-          .single()
 
         if (updateError) {
-          console.error('更新学习记录失败:', updateError)
+          console.error('❌ 更新学习记录失败:', updateError)
           throw updateError
         }
-        
-        console.log('更新学习记录成功:', updatedRecord)
+        console.log('✅ 更新学习记录成功')
       }
 
       // 更新本地状态
+      console.log('🔄 更新本地状态...')
       const updatedWords = [...words]
       updatedWords[currentIndex] = {
         ...currentWord,
@@ -407,60 +464,77 @@ export default function StudyClient({
         interval_days: reviewData.interval,
         needs_review: false
       }
+      
       setWords(updatedWords)
-
-      // 更新统计信息
-      const learnedCount = updatedWords.filter(word => word.last_studied_at).length
-      const reviewingCount = updatedWords.filter(word => !word.last_studied_at).length
-      setStats({
-        total: updatedWords.length,
-        learned: learnedCount,
-        reviewing: reviewingCount
-      })
+      console.log('✅ 本地状态更新完成')
 
       // 移动到下一个单词或结束会话
       const nextIndex = currentIndex + 1
-      if (nextIndex < updatedWords.length) {
+      console.log(`➡️ 准备移动到下一个单词: ${nextIndex}/${words.length}`)
+      
+      if (nextIndex < words.length) {
         setCurrentIndex(nextIndex)
-        await studySession.saveProgress(nextIndex, updatedWords)
+        // 更新全局状态
+        saveStateToGlobal(studySessionRef.current, updatedWords, nextIndex, true)
+        await studySessionRef.current.saveProgress(nextIndex, updatedWords)
+        console.log('✅ 已移动到下一个单词')
       } else {
+        console.log('🎉 学习会话完成')
         setSessionComplete(true)
-        await studySession.clearProgress()
+        // 更新全局状态
+        saveStateToGlobal(studySessionRef.current, [], 0, false)
+        await studySessionRef.current.clearProgress()
       }
     } catch (error) {
-      console.error('保存学习记录失败:', error)
+      console.error('💥 保存学习记录失败:', error)
       setPageError('保存学习进度失败: ' + error.message)
+      
+      // 显示更详细的错误信息
+      if (error.code) {
+        setPageError(`保存学习进度失败: ${error.message} (错误代码: ${error.code})`)
+      }
     }
   }
 
+  // 发音功能
+  const playPronunciation = useCallback((word, type = 'us') => {
+    const audioUrl = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=${type === 'uk' ? 1 : 2}`
+    const audio = new Audio(audioUrl)
+    audio.play().catch(error => {
+      console.error('播放发音失败:', error)
+    })
+  }, [])
+
   // 暂停会话
   const pauseSession = useCallback(() => {
-    if (studySession && words.length > 0) {
-      studySession.saveProgress(currentIndex, words)
+    if (studySessionRef.current && words.length > 0) {
+      studySessionRef.current.saveProgress(currentIndex, words)
       console.log('学习已暂停，进度已保存')
     }
     router.push('/dashboard/study')
-  }, [studySession, words, currentIndex, router])
+  }, [words, currentIndex, router])
 
   // 重新开始会话
   const restartSession = useCallback(async () => {
-    if (studySession) {
-      await studySession.clearProgress()
+    if (studySessionRef.current) {
+      await studySessionRef.current.clearProgress()
     }
     setCurrentIndex(0)
     setSessionComplete(false)
     setWords([])
     setLoading(true)
-    await fetchStudyWords(false)
-  }, [studySession, fetchStudyWords])
+    // 清除全局状态
+    saveStateToGlobal(null, [], 0, false)
+    await fetchStudyData()
+  }, [fetchStudyData, saveStateToGlobal])
 
   // 切换词库
   const changeWordList = useCallback(() => {
-    if (studySession && words.length > 0) {
-      studySession.saveProgress(currentIndex, words)
+    if (studySessionRef.current && words.length > 0) {
+      studySessionRef.current.saveProgress(currentIndex, words)
     }
     router.push('/dashboard/study')
-  }, [studySession, words, currentIndex, router])
+  }, [words, currentIndex, router])
 
   // 强制重置学习进度
   const forceResetProgress = useCallback(async () => {
@@ -478,17 +552,40 @@ export default function StudyClient({
 
       if (error) throw error
 
-      if (studySession) {
-        await studySession.clearProgress()
+      if (studySessionRef.current) {
+        await studySessionRef.current.clearProgress()
+        studySessionRef.current.clearAllCache()
+        StudySession.clearInstance(currentUser.id, currentWordListId)
       }
+      
+      // 重置本地状态
+      initializationRef.current = false
+      preventReinitializeRef.current = false
+      studySessionRef.current = null
+      saveStateToGlobal(null, [], 0, false)
+      
       alert('重置成功！现在可以重新学习这个词库了。')
       restartSession()
     } catch (error) {
       console.error('重置学习进度失败:', error)
       alert('重置失败，请重试')
     }
-  }, [user, authUser, supabase, currentWordListId, studySession, restartSession])
+  }, [user, authUser, supabase, currentWordListId, restartSession, saveStateToGlobal])
 
+  // 手动刷新数据
+  const manualRefresh = useCallback(async () => {
+    if (studySessionRef.current) {
+      studySessionRef.current.clearAllCache()
+    }
+    setLoading(true)
+    // 清除全局状态
+    saveStateToGlobal(null, [], 0, false)
+    await fetchStudyData()
+  }, [fetchStudyData, saveStateToGlobal])
+
+  // 渲染部分保持不变...
+  // ... [之前的渲染代码]
+  
   // 加载状态
   if (loading) {
     return (
@@ -500,7 +597,7 @@ export default function StudyClient({
             {!isVisible && '页面在后台运行，恢复后继续加载...'}
           </div>
           <button
-            onClick={() => fetchStudyWords(false)}
+            onClick={manualRefresh}
             className="mt-4 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm"
           >
             重新加载
@@ -524,7 +621,7 @@ export default function StudyClient({
           <p className="text-red-700 mb-4">{pageError}</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => fetchStudyWords(false)}
+              onClick={manualRefresh}
               className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-medium"
             >
               重新加载
@@ -541,7 +638,6 @@ export default function StudyClient({
     )
   }
 
-  // 没有单词的情况
   if (words.length === 0 && !loading) {
     return (
       <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -589,7 +685,6 @@ export default function StudyClient({
     )
   }
 
-  // 学习完成状态
   if (sessionComplete) {
     return (
       <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -624,6 +719,20 @@ export default function StudyClient({
 
   return (
     <div className="max-w-2xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      {/* 调试信息 - 只在开发环境显示 */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-xs">
+          <div className="font-medium text-yellow-800 mb-2">调试信息:</div>
+          <div className="text-yellow-700 space-y-1">
+            <div>当前单词: {currentWord?.word} (ID: {currentWord?.id})</div>
+            <div>学习记录ID: {currentWord?.study_record_id || 'null'}</div>
+            <div>复习次数: {currentWord?.review_count || 0}</div>
+            <div>熟悉度: {currentWord?.familiarity || 0}</div>
+            <div>用户ID: {user?.id || authUser?.id}</div>
+            <div>词库ID: {currentWordListId}</div>
+          </div>
+        </div>
+      )}
       {/* 错误提示 */}
       {pageError && (
         <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
@@ -636,7 +745,7 @@ export default function StudyClient({
             <div className="ml-3">
               <p className="text-sm text-red-700">
                 {pageError}
-                <button onClick={() => fetchStudyWords(false)} className="ml-2 text-red-700 underline">
+                <button onClick={manualRefresh} className="ml-2 text-red-700 underline">
                   重试
                 </button>
               </p>
@@ -712,6 +821,7 @@ export default function StudyClient({
           <li>• 系统会根据你的选择智能安排复习时间</li>
           <li>• 进度会自动保存，可以随时暂停和继续</li>
           <li>• 每日学习目标: {dailyGoal} 个新单词</li>
+          <li>• 页面切换时状态会自动保存，恢复后立即继续</li>
         </ul>
       </div>
     </div>
