@@ -48,7 +48,7 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
         
         {/* 发音按钮 */}
         <div className="flex justify-center space-x-4 mb-4">
-          {word.BrE && (
+          {word.bre && (
             <button
               onClick={() => onPlayPronunciation(word.word, 'uk')}
               className="flex items-center space-x-2 bg-blue-100 hover:bg-blue-200 text-blue-700 px-4 py-2 rounded-lg transition-colors"
@@ -56,10 +56,10 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
               </svg>
-              <span>英音 {word.BrE}</span>
+              <span>英音 {word.bre}</span>
             </button>
           )}
-          {word.AmE && (
+          {word.ame && (
             <button
               onClick={() => onPlayPronunciation(word.word, 'us')}
               className="flex items-center space-x-2 bg-red-100 hover:bg-red-200 text-red-700 px-4 py-2 rounded-lg transition-colors"
@@ -67,7 +67,7 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
               </svg>
-              <span>美音 {word.AmE}</span>
+              <span>美音 {word.ame}</span>
             </button>
           )}
         </div>
@@ -96,7 +96,7 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
       {showDefinition && (
         <div className="mb-8">
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-6">
-            <h3 className="text-lg font-medium text-gray-700 mb-3">释义：</h3>
+            {/* <h3 className="text-lg font-medium text-gray-700 mb-3">释义：</h3> */}
             <div className="text-gray-800 leading-relaxed whitespace-pre-wrap">
               {word.definition}
             </div>
@@ -117,9 +117,6 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
               >
                 <div className="text-xl mb-1">😫</div>
                 <div>忘记</div>
-                <div className="text-xs opacity-0 group-hover:opacity-100 transition-opacity mt-1">
-                  稍后重新学习
-                </div>
               </button>
               <button
                 onClick={() => handleAnswer(2)}
@@ -127,9 +124,6 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
               >
                 <div className="text-xl mb-1">😕</div>
                 <div>困难</div>
-                <div className="text-xs opacity-0 group-hover:opacity-100 transition-opacity mt-1">
-                  1天后复习
-                </div>
               </button>
               <button
                 onClick={() => handleAnswer(3)}
@@ -137,9 +131,6 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
               >
                 <div className="text-xl mb-1">😐</div>
                 <div>一般</div>
-                <div className="text-xs opacity-0 group-hover:opacity-100 transition-opacity mt-1">
-                  正常间隔
-                </div>
               </button>
               <button
                 onClick={() => handleAnswer(4)}
@@ -147,9 +138,6 @@ export default function WordCard({ word, onAnswer, onPlayPronunciation }) {
               >
                 <div className="text-xl mb-1">😊</div>
                 <div>简单</div>
-                <div className="text-xs opacity-0 group-hover:opacity-100 transition-opacity mt-1">
-                  长期记忆
-                </div>
               </button>
             </div>
         </div>

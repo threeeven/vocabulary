@@ -27,10 +27,9 @@ export default function WordListWordsClient({
   initialWords = []
 }) {
   const router = useRouter()
-  const [words, setWords] = useState(initialWords)
-  const [wordListInfo, setWordListInfo] = useState(initialWordListInfo)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [words] = useState(initialWords)
+  const [wordListInfo] = useState(initialWordListInfo)
+  const [error] = useState('')
   const [filters, setFilters] = useState({
     status: 'all',
     showDefinition: true
@@ -77,8 +76,8 @@ export default function WordListWordsClient({
     return sortedWords.filter(word => 
       word.word.toLowerCase().includes(keyword) ||
       (word.definition && word.definition.toLowerCase().includes(keyword)) ||
-      (word.BrE && word.BrE.toLowerCase().includes(keyword)) ||
-      (word.AmE && word.AmE.toLowerCase().includes(keyword))
+      (word.bre && word.bre.toLowerCase().includes(keyword)) ||
+      (word.ame && word.ame.toLowerCase().includes(keyword))
     )
   }, [sortedWords, searchKeyword])
 
@@ -168,6 +167,11 @@ export default function WordListWordsClient({
       setSelectedWords(allWordIds)
     }
     setSelectAll(!selectAll)
+  }
+
+  const handleClearSelection = () => {
+    setSelectedWords(new Set())
+    setSelectAll(false) // 添加这行
   }
 
   // PDF导出处理函数（保持不变）
@@ -420,7 +424,7 @@ export default function WordListWordsClient({
               显示 {filteredWords.length} 个单词
               {searchKeyword && (
                 <span className="text-blue-600 ml-1">
-                  (搜索: "{searchKeyword}")
+                  (搜索: &quot;{searchKeyword}&quot;)
                 </span>
               )}
             </span>
@@ -471,7 +475,7 @@ export default function WordListWordsClient({
         <ExportActions 
           selectedWordsCount={selectedWords.size}
           onExport={handleExport}
-          onClearSelection={() => setSelectedWords(new Set())}
+          onClearSelection={handleClearSelection}
         />
       )}
     </div>
@@ -523,7 +527,7 @@ function WordListItem({ word, isSelected, onSelect, showDefinition, playPronunci
                 
                 {/* 发音按钮 */}
                 <div className="flex items-center space-x-2">
-                  {word.BrE && (
+                  {word.bre && (
                     <button
                       onClick={() => playPronunciation(word.word, 'uk')}
                       className="flex items-center space-x-1 text-blue-600 hover:text-blue-800 text-sm"
@@ -532,10 +536,10 @@ function WordListItem({ word, isSelected, onSelect, showDefinition, playPronunci
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
                       </svg>
-                      <span>英 {word.BrE}</span>
+                      <span>英 {word.bre}</span>
                     </button>
                   )}
-                  {word.AmE && (
+                  {word.ame && (
                     <button
                       onClick={() => playPronunciation(word.word, 'us')}
                       className="flex items-center space-x-1 text-red-600 hover:text-red-800 text-sm"
@@ -544,7 +548,7 @@ function WordListItem({ word, isSelected, onSelect, showDefinition, playPronunci
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m-2.828-9.9a9 9 0 012.728-2.728" />
                       </svg>
-                      <span>美 {word.AmE}</span>
+                      <span>美 {word.ame}</span>
                     </button>
                   )}
                 </div>
