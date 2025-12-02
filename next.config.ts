@@ -1,4 +1,4 @@
-// next.config.js
+// next.config.ts
 const withPWA = require('next-pwa')({
   dest: 'public',
   register: true,
@@ -65,8 +65,6 @@ const withPWA = require('next-pwa')({
       },
     },
   ],
-  
-  buildExcludes: [/middleware-manifest\.json$/],
 })
 
 const nextConfig = {
@@ -78,9 +76,58 @@ const nextConfig = {
   experimental: {
     turbo: false,  // 明确禁用 Turbopack
   },
-  
-  // 启用传统的 SWC 压缩
-  swcMinify: true,
+
+  // 🔧 修复：添加安全头部配置
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Content-Security-Policy',
+            value: `
+              default-src 'self';
+              script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com;
+              style-src 'self' 'unsafe-inline';
+              img-src 'self' data: blob: https:;
+              font-src 'self' data:;
+              connect-src 'self' 
+                https://dict.youdao.com 
+                https://jovivqewmmxcjbqrmimf.supabase.co 
+                wss://jovivqewmmxcjbqrmimf.supabase.co;
+              media-src 'self' https://dict.youdao.com blob: data:;
+              manifest-src 'self';
+              worker-src 'self' blob:;
+              frame-src 'self';
+              base-uri 'self';
+              form-action 'self';
+              object-src 'none';
+            `
+              .replace(/\n/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+          },
+          {
+            key: 'X-Frame-Options',
+            value: 'DENY'
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff'
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'strict-origin-when-cross-origin'
+          },
+          {
+            key: 'Permissions-Policy',
+            value: 'camera=(), microphone=(), geolocation=()'
+          }
+        ],
+      },
+    ];
+  }
 }
+
 
 module.exports = withPWA(nextConfig)

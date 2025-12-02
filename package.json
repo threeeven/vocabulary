@@ -5,12 +5,12 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:cf": "next build && npx opennext build",
-    "build:legacy": "npx @cloudflare/next-on-pages@1",
+    "build-icons": "node scripts/generate-icons.js",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@ducanh2912/next-pwa": "^10.2.9",
     "@supabase/auth-helpers-nextjs": "^0.15.0",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.86.0",
@@ -23,7 +23,6 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "recharts": "^3.5.1",
-    "sharp": "^0.34.5",
     "workbox-webpack-plugin": "^7.4.0"
   },
   "devDependencies": {
@@ -35,6 +34,8 @@
     "baseline-browser-mapping": "^2.8.32",
     "eslint": "^9",
     "eslint-config-next": "16.0.3",
+    "jimp": "^1.6.0",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

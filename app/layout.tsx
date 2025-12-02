@@ -99,15 +99,21 @@ export default function RootLayout({
       <head>
         {/* 基本标签 */}
         <link rel="manifest" href="/manifest.json" />
-        <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" href="/favicon.png" type="image/png" />
+        <link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32" />
+        <link rel="icon" href="/favicon-16x16.png" type="image/png" sizes="16x16" />
+        <link rel="icon" href="/favicon-48x48.png" type="image/png" sizes="48x48" />
         
         {/* 苹果触摸图标 */}
-        <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
-        <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <link rel="apple-touch-icon" sizes="167x167" href="/icons/apple-touch-icon-167x167.png" />
+        <link rel="apple-touch-icon" sizes="152x152" href="/icons/apple-touch-icon-152x152.png" />
+        <link rel="apple-touch-icon" sizes="120x120" href="/icons/apple-touch-icon-120x120.png" />
         
-        {/* 微软磁贴颜色 */}
+        {/* 微软磁贴配置 */}
         <meta name="msapplication-TileColor" content="#3b82f6" />
-        <meta name="msapplication-TileImage" content="/icons/icon-144x144.png" />
+        <meta name="msapplication-TileImage" content="/icons/mstile-144x144.png" />
+        <meta name="msapplication-square310x310logo" content="/icons/mstile-310x310.png" />
         
         {/* 苹果特定标签 */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -118,12 +124,6 @@ export default function RootLayout({
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="application-name" content="单词学习App" />
         <meta name="format-detection" content="telephone=no" />
-        
-        {/* 安全相关 headers */}
-        <meta
-          httpEquiv="Content-Security-Policy"
-          content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:;"
-        />
         
         {/* 预加载关键资源 */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -196,20 +196,7 @@ export default function RootLayout({
         {/* PWA 安装逻辑 */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `
-              // 检测是否支持 Service Worker
-              if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function() {
-                  navigator.serviceWorker.register('/sw.js')
-                    .then(function(registration) {
-                      console.log('Service Worker 注册成功:', registration.scope);
-                    })
-                    .catch(function(error) {
-                      console.log('Service Worker 注册失败:', error);
-                    });
-                });
-              }
-              
+            __html: `              
               // 检测是否可安装到主屏幕
               let deferredPrompt;
               const installButton = document.getElementById('installButton');
@@ -246,7 +233,7 @@ export default function RootLayout({
                 installGuide.innerHTML = 
                   '<p style="margin:0 0 10px 0; font-size:14px;">' +
                   '点击安装按钮，然后选择"添加到主屏幕"</p>' +
-                  '<button onclick="this.parentNode.style.display='none'" ' +
+                  '<button onclick="this.parentNode.style.display=\\'none\\'" ' +
                   'style="background:#ef4444; color:white; border:none; ' +
                   'padding:5px 10px; border-radius:4px; cursor:pointer;">' +
                   '知道了</button>';
