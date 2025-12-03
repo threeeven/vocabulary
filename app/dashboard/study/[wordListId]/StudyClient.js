@@ -1,6 +1,6 @@
-// app/dashboard/study/[wordListId]/StudyClient.js
+// app/dashboard/study/[wordListId]/StudyClient.js - 修复版
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { createClient } from '@/lib/supabase/client'
 import { useParams, useRouter } from 'next/navigation'
@@ -16,6 +16,8 @@ export default function StudyClient({
   const params = useParams()
   const router = useRouter()
   const currentWordListId = wordListId || params.wordListId
+  const hasFetchedRef = useRef(false)
+  const [isSupabaseAlive, setIsSupabaseAlive] = useState(true)
   
   // 状态管理
   const [words, setWords] = useState([])
@@ -30,17 +32,38 @@ export default function StudyClient({
   const [dailyGoal, setDailyGoal] = useState(initialUserSettings.daily_goal)
   const [wordListInfo, setWordListInfo] = useState(initialWordListInfo)
   const [pageError, setPageError] = useState('')
-  const [isReloading, setIsReloading] = useState(false) // 防止重复刷新
   const supabase = createClient()
 
-  // 获取学习数据 - 简化版本
+  // 获取学习数据 - 移除所有刷新逻辑
   const fetchStudyData = useCallback(async () => {
+    // 防止重复获取
+    if (hasFetchedRef.current) {
+      return
+    }
+    
     try {
       setLoading(true)
       setPageError('')
+      hasFetchedRef.current = true
 
       const currentUser = user || authUser
       if (!currentUser || !currentWordListId) {
+        console.error('缺少用户信息或词库ID')
+        setLoading(false)
+        return
+      }
+      
+      console.log('开始获取学习数据...', {
+        userId: currentUser.id,
+        wordListId: currentWordListId
+      })
+      
+      // 检查 Supabase 连接
+      const { data: testData, error: testError } = await supabase.auth.getSession()
+      if (testError) {
+        console.error('Supabase 连接失败:', testError)
+        setPageError('连接失败，请检查网络')
+        setLoading(false)
         return
       }
       
@@ -54,19 +77,22 @@ export default function StudyClient({
         })
 
       if (error) {
-        console.error('❌ 获取学习数据失败:', error)
+        console.error('获取学习数据失败:', error)
         setPageError('获取学习数据失败: ' + error.message)
         return
       }
 
+      console.log('获取到单词数量:', studyWords?.length || 0)
+
       // 处理没有单词的情况
-      if (studyWords.length === 0) {
+      if (!studyWords || studyWords.length === 0) {
+        console.log('今天没有需要学习的单词')
         setSessionComplete(true)
         setLoading(false)
         return
       }
 
-      // 从本地存储恢复进度（如果有）
+      // 从本地存储恢复进度
       const savedProgress = getProgressFromStorage(currentUser.id, currentWordListId)
       let startIndex = 0
       if (savedProgress && savedProgress.currentIndex > 0) {
@@ -92,6 +118,7 @@ export default function StudyClient({
       }
 
     } catch (error) {
+      console.error('获取学习数据异常:', error)
       setPageError('获取学习数据失败: ' + error.message)
     } finally {
       setLoading(false)
@@ -135,53 +162,24 @@ export default function StudyClient({
     localStorage.removeItem(storageKey)
   }
 
-  // 强制刷新整个页面
-  const manualReloadPage = useCallback(() => {
-    if (isReloading) {
-      return
-    }
-    
-    setIsReloading(true)
-    
-    // 添加一个小的延迟，确保状态已更新
-    setTimeout(() => {
-      window.location.reload()
-    }, 100)
-  }, [isReloading])
+  // 手动重新获取数据
+  const manualReloadData = useCallback(async () => {
+    console.log('手动重新获取数据...')
+    hasFetchedRef.current = false
+    await fetchStudyData()
+  }, [fetchStudyData])
 
-  // 页面可见性检测 - 强制刷新版本
+  // 初始化 - 只获取一次数据
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && !isReloading) {
-        setIsReloading(true)
-        setTimeout(() => {
-          window.location.reload()
-        }, 100)
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
+    console.log('StudyClient 初始化，开始获取数据...')
+    fetchStudyData()
     
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      console.log('StudyClient 卸载')
     }
-  }, [isReloading])
+  }, [fetchStudyData])
 
-  // 初始化效果 - 首次进入时强制刷新
-  useEffect(() => {
-    
-    // 检查是否已经刷新过（防止无限循环）
-    const hasRefreshed = sessionStorage.getItem('study_page_refreshed')
-    
-    if (!hasRefreshed) {
-      sessionStorage.setItem('study_page_refreshed', 'true')
-      manualReloadPage()
-    } else {
-      fetchStudyData()
-    }
-  }, [fetchStudyData, manualReloadPage])
-
-  // 处理学习答案 - 简化版本
+  // 处理学习答案
   const handleAnswer = async (familiarity) => {
     if (words.length === 0) {
       return
@@ -191,16 +189,13 @@ export default function StudyClient({
     const currentUser = user || authUser
 
     try {
-      // 如果是"忘记"（familiarity=1），重新加入学习队列
       if (familiarity === 1) {
-        
         const updatedWords = [...words]
         updatedWords[currentIndex] = {
           ...currentWord,
           needs_review: true
         }
         
-        // 将当前单词移到队列末尾
         const currentWordCopy = {...updatedWords[currentIndex]}
         updatedWords.splice(currentIndex, 1)
         updatedWords.push(currentWordCopy)
@@ -211,7 +206,6 @@ export default function StudyClient({
         return
       }
 
-      // 使用数据库函数更新学习记录
       const { data, error } = await supabase
         .rpc('update_study_record', {
           p_user_id: currentUser.id,
@@ -221,7 +215,7 @@ export default function StudyClient({
         })
 
       if (error) {
-        console.error('❌ 更新学习记录失败:', error)
+        console.error('更新学习记录失败:', error)
         throw error
       }
 
@@ -230,12 +224,10 @@ export default function StudyClient({
         throw new Error(result.message)
       }
 
-
-      // 更新本地状态
       const updatedWords = [...words]
       updatedWords[currentIndex] = {
         ...currentWord,
-        study_record_id: currentWord.study_record_id, // 保持原记录ID
+        study_record_id: currentWord.study_record_id,
         familiarity,
         last_studied_at: new Date().toISOString(),
         next_review_at: result.next_review_at,
@@ -247,7 +239,6 @@ export default function StudyClient({
       
       setWords(updatedWords)
 
-      // 移动到下一个单词或结束会话
       const nextIndex = currentIndex + 1
       
       if (nextIndex < words.length) {
@@ -258,7 +249,7 @@ export default function StudyClient({
         clearProgressFromStorage(currentUser.id, currentWordListId)
       }
     } catch (error) {
-      console.error('💥 保存学习记录失败:', error)
+      console.error('保存学习记录失败:', error)
       setPageError('保存学习进度失败: ' + error.message)
     }
   }
@@ -289,6 +280,7 @@ export default function StudyClient({
     setSessionComplete(false)
     setWords([])
     setLoading(true)
+    hasFetchedRef.current = false
     await fetchStudyData()
   }, [fetchStudyData, user, authUser, currentWordListId])
 
@@ -309,11 +301,10 @@ export default function StudyClient({
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4"></div>
           <div className="text-lg text-gray-600">加载学习内容中...</div>
           <button
-            onClick={manualReloadPage}
-            disabled={isReloading}
-            className="mt-4 bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm"
+            onClick={manualReloadData}
+            className="mt-4 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm"
           >
-            {isReloading ? '刷新中...' : '刷新页面'}
+            重新加载
           </button>
         </div>
       </div>
@@ -334,11 +325,10 @@ export default function StudyClient({
           <p className="text-red-700 mb-4">{pageError}</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={manualReloadPage}
-              disabled={isReloading}
-              className="bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white px-6 py-3 rounded-lg font-medium"
+              onClick={manualReloadData}
+              className="bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-medium"
             >
-              {isReloading ? '刷新中...' : '刷新页面'}
+              重试
             </button>
             <button
               onClick={() => router.push('/dashboard/study')}
@@ -367,11 +357,10 @@ export default function StudyClient({
           
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={manualReloadPage}
-              disabled={isReloading}
-              className="bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white px-6 py-3 rounded-lg font-medium"
+              onClick={manualReloadData}
+              className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-medium"
             >
-              {isReloading ? '刷新中...' : '刷新页面'}
+              重新检查
             </button>
             <button
               onClick={() => router.push('/dashboard/study')}
@@ -439,11 +428,10 @@ export default function StudyClient({
               <p className="text-sm text-red-700">
                 {pageError}
                 <button 
-                  onClick={manualReloadPage} 
-                  disabled={isReloading}
-                  className="ml-2 text-red-700 underline disabled:text-red-400"
+                  onClick={manualReloadData} 
+                  className="ml-2 text-red-700 underline"
                 >
-                  {isReloading ? '刷新中...' : '刷新页面'}
+                  重试
                 </button>
               </p>
             </div>
@@ -482,11 +470,10 @@ export default function StudyClient({
               切换词库
             </button>
             <button
-              onClick={manualReloadPage}
-              disabled={isReloading}
-              className="bg-green-500 hover:bg-green-600 disabled:bg-green-300 text-white px-4 py-2 rounded-lg font-medium text-sm"
+              onClick={manualReloadData}
+              className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg font-medium text-sm"
             >
-              {isReloading ? '刷新中...' : '刷新页面'}
+              刷新数据
             </button>
           </div>
         </div>
@@ -516,14 +503,6 @@ export default function StudyClient({
         onAnswer={handleAnswer}
         onPlayPronunciation={playPronunciation}
       />
-
-      {/* 学习提示 */}
-      {/* <div className="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <h4 className="font-medium text-blue-800 mb-2">学习提示</h4>
-        <ul className="text-sm text-blue-700 space-y-1">
-          <li>• 每日学习目标: {dailyGoal} 个新单词</li>
-        </ul>
-      </div> */}
     </div>   
   )
 }

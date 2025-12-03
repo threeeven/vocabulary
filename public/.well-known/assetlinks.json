@@ -1,0 +1,10 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.lu.word",
+    "sha256_cert_fingerprints": [
+      "4594c9f1d58ace2652951895512ee5ed79b543c4431c1ca4f3b2c9b22e77ef83"
+    ]
+  }
+}]
